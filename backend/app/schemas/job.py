@@ -3,19 +3,13 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+from app.core.config import settings
 from app.schemas.enums import AcousticProfileEnum, JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.schemas.timecode import parse_time
 
 
 
-"""Contratos de dados dos jobs assíncronos (T3.8).
- 
-  1. *Params + JobCreateSchema   -> o que o CLIENTE envia à API.
-  2. JobUpdateEventSchema        -> mensagem do worker para a API (broker).
-  3. JobStatusResponseSchema     -> o que a API DEVOLVE ao cliente.
- 
-Vocabulário único: step, step_progress, progress, error_code, error_message, output.
-"""
 # =====================================
 # CONTRATOS DE DADOS E ESQUEMAS PYDANTIC
 # =====================================
@@ -31,20 +25,19 @@ class _StrictModel(BaseModel):
 
 
 # =====================================================================
-# 1. PARÂMETROS POR TIPO DE JOB (união discriminada por "job_type")
-#    Os literais têm de coincidir com JobTypeEnum (há um teste para isso).
+# 1. PARÂMETROS POR TIPO DE JOB 
 # =====================================================================
 
 class IngestionParams(_StrictModel):
     job_type: Literal["ingestion"] = "ingestion"
-    source_url = HttpUrl | None = None
-    media_id = UUID | None = None   # referência a um upload
+    source_url: HttpUrl | None = None
+    media_id: UUID | None = None   # referência a um upload
     time_start: str | None = None
     time_end: str | None = None
     
     @model_validator(mode="after")
     def _validate(self) -> IngestionParams:
-        if (self.sourcel_url is None) == (self.media_id is None):
+        if (self.source_url is None) == (self.media_id is None):
             raise ValueError("Indique exatamente um de source url ou media id")
         start = parse_time(self.time_start) if self.time_start is not None else None
         end = parse_time(self.time_end) if self.time_end is not None else None
@@ -73,8 +66,8 @@ class JobParametersSchema(BaseModel):
     scan_every_seconds: float = Field(default=1.0, gt=0.0)
     
     # Transcrição de áudio
-    whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    language: str = "pt"
+    whisper_model: str = settings.WHISPER_MODEL
+    language: str = settings.DEFAULT_LANGUAGE
     
     @model_validator(mode="after")
     def validate_source_and_intervals(self) -> JobParametersSchema:
@@ -98,10 +91,8 @@ class TranscriptionParams(_StrictModel):
     language: str = Field(default="pt", pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
     acoustic_profile: AcousticProfileEnum | None = None
 
-JobParameters = Annotated[
-    IngestionParams | TranscriptionParams,
-    Field(discriminator="job_type"),
-]
+JobParameters = Annotated[IngestionParams | TranscriptionParams,Field(discriminator="job_type")]
+
 class JobCreateSchema(_StrictModel):
     """Corpo do POST /projects/{project_id}/jobs.
  
@@ -119,6 +110,17 @@ class JobCreateSchema(_StrictModel):
 # =====================================================================
 # 2. EVENTO DO WORKER (broker)
 # =====================================================================
+class JobRequestMessage(BaseModel):
+    """API -> worker. Publicada no exchange 'jobs' com routing key = job_type."""
+    
+    job_id: UUID
+    project_id: UUID
+    attempt: int = Field(default=1, ge=1)
+    parameters: JobParameters
+    requested_at: datetime = Field(default_factory=_utcnow) 
+    
+
+
 class JobUpdateEventSchema(BaseModel):
     """Worker -> API. Progresso, conclusão ou falha."""
     job_id: UUID
