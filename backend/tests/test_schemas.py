@@ -5,7 +5,6 @@ from pydantic import ValidationError
 from app.schemas.enums import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.schemas.job import (
     IngestionParams,
-    JobParametersSchema,
     JobUpdateEventSchema,
     TranscriptionParams,
     JobRequestMessage,
@@ -58,6 +57,7 @@ def test_ingestion_interval():
         
     with pytest.raises(ValueError):
         IngestionParams(source_url=URL, time_start="X", time_end="01:00")
+        
     IngestionParams(source_url=URL, time_start="00:51", time_end="01:45")
     IngestionParams(source_url=URL, time_start="00:51")
     IngestionParams(source_url=URL, time_end="01:45")

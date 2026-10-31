@@ -46,7 +46,7 @@ class IngestionParams(_StrictModel):
             raise ValueError("time_end tem de ser posterior a time_start")
         return self
     
-
+"""
 class JobParametersSchema(BaseModel):
     # Fontes de vídeo
     video_url: str | None = None
@@ -80,6 +80,7 @@ class JobParametersSchema(BaseModel):
             if t_end <= t_start: raise ValueError("O final tem de ser superior ao inicio")
         
         return self
+"""
 
 class TranscriptionParams(_StrictModel):
     """
@@ -88,7 +89,7 @@ class TranscriptionParams(_StrictModel):
     
     job_type: Literal["transcription"] = "transcription"
     media_id: UUID
-    language: str = Field(default="pt", pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
+    language: str = Field(default=settings.DEFAULT_LANGUAGE, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
     acoustic_profile: AcousticProfileEnum | None = None
 
 JobParameters = Annotated[IngestionParams | TranscriptionParams,Field(discriminator="job_type")]
@@ -124,8 +125,9 @@ class JobRequestMessage(BaseModel):
 class JobUpdateEventSchema(BaseModel):
     """Worker -> API. Progresso, conclusão ou falha."""
     job_id: UUID
+    event_id: UUID = Field(default_factory=uuid4)
     attempt: int = Field(default=1, ge=1)
-    step: JobStepProcessingEnum
+    step: JobStepProcessingEnum | None = None
     step_progress: float = Field(ge=0.0, le=100.0)
     status: JobStatusEnum
     error_code: JobErrorCodeEnum | None = None
@@ -152,7 +154,7 @@ class JobStatusResponseSchema(BaseModel):
     project_id: UUID
     job_type: JobTypeEnum
     status: JobStatusEnum
-    step: JobStepProcessingEnum
+    step: JobStepProcessingEnum | None = None
     step_progress: float = Field(default=0.0, ge=0.0, le=100.0)
     progress: float = Field(default=0.0, ge=0.0, le=100.0)
     attempt: int = Field(default=1, ge=1)

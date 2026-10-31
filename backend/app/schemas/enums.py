@@ -24,6 +24,7 @@ class JobStepProcessingEnum(str, Enum):
     """Fases granulares para reporte de progresso na interface."""
     INITIALIZING="initializing"         # Criação do workspace temporário isolado no disco do worker
     DOWNLOADING_MEDIA="downloading_media"       # Descarregamento da fonte de vídeo via rede ou storage
+    INSPECTING_MEDIA="inspecting_media"
     EXTRACTING_AUDIO="extracting_audio"         # Extração e conversão do fluxo áudio para análise
     GENERATING_PROXY = "generating_proxy"       # proxy 720p + keyframes
     #SCANNING_FACES="scanning_faces" # Deteção e correspondência facial nos frames com visão computacional
@@ -44,6 +45,7 @@ class JobErrorCodeEnum(str, Enum):
     CORRUPTED_MEDIA = "corrupted_media"
     NO_AUDIO_TRACK = "no_audio_track"
     INTERNAL_ERROR = "internal_error"
+    TIMEOUT= "timeout"
     
     
 class AcousticProfileEnum(str, Enum):
