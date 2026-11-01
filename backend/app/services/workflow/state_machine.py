@@ -48,7 +48,7 @@ class ApplyResult:
     job: JobSnapshot
     reason: str | None = None
     
-def change_status(job: JobSnapshot, target: JobStatusEnum, at: datetime) -> JobSnapshot:
+def change_status(job: JobSnapshot, target: JobStatusEnum, at: datetime, error_code: JobErrorCodeEnum | None = None, error_message: str | None = None) -> JobSnapshot:
     validate_transition(job.status, target)
     
     changes: dict[str, Any] = {"status":target}
@@ -56,6 +56,8 @@ def change_status(job: JobSnapshot, target: JobStatusEnum, at: datetime) -> JobS
         changes["started_at"] = at
     if final_state(target):
         changes["finished_at"] = at
+    if error_code is not None:
+        changes["error_code"] = error_code
     return replace(job, **changes) # transforma as chaves e valores em argumentos
 
 
@@ -116,7 +118,8 @@ def apply_event(job: JobSnapshot, event: JobUpdateEventSchema) -> ApplyResult:
         
     else:
         if event.step is not None:
-            changes["step"] == event.step
+            changes["step"] = event.step
+            changes["step_progress"] = event.step_progress
         
         changes["finished_at"] = event.emitted_at
         if event.status == JobStatusEnum.FAILED:

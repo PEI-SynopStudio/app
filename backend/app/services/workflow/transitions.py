@@ -14,7 +14,7 @@ def final_state(status: JobStatusEnum) -> bool:
 
 def can_transition(current: JobStatusEnum, target: JobStatusEnum) -> bool:
     match (current, target):
-        case (JobStatusEnum.PENDING, JobStatusEnum.QUEUED | JobStatusEnum.PROCESSING | JobStatusEnum.CANCELLED | JobStatusEnum.FAILED):
+        case (JobStatusEnum.PENDING, JobStatusEnum.QUEUED | JobStatusEnum.CANCELLED | JobStatusEnum.FAILED):
             return True
         case (JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING | JobStatusEnum.CANCELLED | JobStatusEnum.FAILED):
             return True
@@ -26,4 +26,4 @@ def can_transition(current: JobStatusEnum, target: JobStatusEnum) -> bool:
         
 def validate_transition(current: JobStatusEnum, target: JobStatusEnum) -> None:
     if not can_transition(current, target):
-        raise InvalidStateTransitionError(current.value, target.value)
+        raise InvalidStateTransitionError(getattr(current, "value", str(current)), getattr(target, "value", str(target)))
