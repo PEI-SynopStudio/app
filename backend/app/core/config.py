@@ -68,6 +68,20 @@ YTDLP_OUTPUT_TEMPLATE = "{stem}.%(ext)s"
 YTDLP_REMUXER = "FFmpegVideoRemuxer"
 ERROR_DOWNLOAD_FAILED = "Failed to download video with yt-dlp: {details}"
 
+# --- Media inspection and audio normalization (PyAV) ---
+STREAM_TYPE_AUDIO = "audio"
+STREAM_TYPE_VIDEO = "video"
+MEDIA_WRITE_MODE = "w"
+AUDIO_SAMPLE_RATE = 16000
+AUDIO_LAYOUT = "mono"
+AUDIO_SAMPLE_FORMAT = "s16"
+AUDIO_CODEC = "pcm_s16le"
+AUDIO_CONTAINER = "wav"
+ERROR_FILE_NOT_FOUND = "File not found: {path}"
+ERROR_UNREADABLE_MEDIA = "Corrupted or unreadable media file: {details}"
+ERROR_NO_AUDIO_STREAM = "Video rejected: does not contain any decodable audio stream."
+ERROR_AUDIO_EXTRACTION_FAILED = "Failed to extract normalized audio: {details}"
+
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)

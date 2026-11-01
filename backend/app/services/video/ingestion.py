@@ -1,13 +1,26 @@
-import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import List, Optional
 
+import av
+from pydantic import BaseModel
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, download_range_func, parse_duration
 
 from app.core.config import (
+    AUDIO_CODEC,
+    AUDIO_CONTAINER,
+    AUDIO_LAYOUT,
+    AUDIO_SAMPLE_FORMAT,
+    AUDIO_SAMPLE_RATE,
+    ERROR_AUDIO_EXTRACTION_FAILED,
     ERROR_DOWNLOAD_FAILED,
+    ERROR_FILE_NOT_FOUND,
+    ERROR_NO_AUDIO_STREAM,
+    ERROR_UNREADABLE_MEDIA,
+    MEDIA_WRITE_MODE,
+    STREAM_TYPE_AUDIO,
+    STREAM_TYPE_VIDEO,
     YTDLP_FORMAT_SORT,
     YTDLP_FORMAT_TEMPLATE,
     YTDLP_MAX_HEIGHT,
@@ -16,66 +29,91 @@ from app.core.config import (
     YTDLP_REMUXER,
 )
 
-# Root directory mounted via Docker volume (/data/media)
-MEDIA_ROOT = Path("/data/media")
+class StreamInfo(BaseModel):
+    index: int
+    codec_type: str
+    codec_name: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    frame_rate: Optional[float] = None
+    sample_rate: Optional[int] = None
+    channels: Optional[int] = None
 
 
-# ==============================================================================
-# Inspect the container with ffprobe; reject unreadable files and files without audio.
-# Source: MS2 FR02 - Step 3 (Container and Stream Integrity Inspection)
-# ==============================================================================
-def inspect_media(input_path: Path) -> Dict[str, Any]:
+class MediaInfo(BaseModel):
+    format_name: str
+    duration_seconds: Optional[float] = None
+    size_bytes: int
+    streams: List[StreamInfo]
+
+    def streams_of(self, codec_type: str) -> List[StreamInfo]:
+        return [stream for stream in self.streams if stream.codec_type == codec_type]
+
+
+
+
+# Inspect the container with PyAV; reject unreadable files and files without audio.
+# Source: MS2 FR02 – Step 3 (Container and Stream Integrity Inspection).
+def inspect_media(input_path: Path) -> MediaInfo:
     """Inspect media container integrity and verify the existence of a decodable audio stream."""
     if not input_path.exists():
-        raise FileNotFoundError(f"File not found: {input_path}")
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=input_path))
 
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "stream=codec_type,codec_name,channels,sample_rate",
-        "-show_entries", "format=duration,size,format_name",
-        "-of", "json",
-        str(input_path),
-    ]
+    try:
+        with av.open(str(input_path)) as container:
+            streams = []
+            for stream in container.streams:
+                codec = stream.codec_context
+                info = StreamInfo(index=stream.index, codec_type=stream.type, codec_name=codec.name)
+                if stream.type == STREAM_TYPE_VIDEO:
+                    info.width, info.height = codec.width, codec.height
+                    info.frame_rate = float(stream.average_rate) if stream.average_rate else None
+                elif stream.type == STREAM_TYPE_AUDIO:
+                    info.sample_rate = codec.sample_rate
+                    info.channels = codec.channels
+                streams.append(info)
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            media = MediaInfo(
+                format_name=container.format.name,
+                duration_seconds=container.duration / av.time_base if container.duration else None,
+                size_bytes=container.size,
+                streams=streams,
+            )
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_UNREADABLE_MEDIA.format(details=exc)) from exc
 
-    if result.returncode != 0:
-        raise RuntimeError(f"Corrupted or unreadable media file: {result.stderr.strip()}")
+    if not media.streams_of(STREAM_TYPE_AUDIO):
+        raise ValueError(ERROR_NO_AUDIO_STREAM)
 
-    probe_data = json.loads(result.stdout)
-    streams = probe_data.get("streams", [])
-
-    has_audio = any(s.get("codec_type") == "audio" for s in streams)
-    if not has_audio:
-        raise ValueError("Video rejected: does not contain any decodable audio stream.")
-
-    return probe_data
+    return media
 
 
-# ==============================================================================
-# Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input).
+# Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input) with PyAV.
 # Source: MS2 FR02 – Step 4 (Audio Extraction and Normalization).
-# ==============================================================================
 def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
     """Extract and normalize audio stream to uncompressed 16 kHz, 16-bit mono PCM WAV."""
     output_wav_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(video_path),
-        "-vn",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
-        str(output_wav_path),
-    ]
+    try:
+        with av.open(str(video_path)) as source:
+            if not source.streams.audio:
+                raise ValueError(ERROR_NO_AUDIO_STREAM)
+            input_stream = source.streams.audio[0]
+            resampler = av.AudioResampler(
+                format=AUDIO_SAMPLE_FORMAT, layout=AUDIO_LAYOUT, rate=AUDIO_SAMPLE_RATE
+            )
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to extract normalized audio: {result.stderr.strip()}")
+            with av.open(str(output_wav_path), MEDIA_WRITE_MODE, format=AUDIO_CONTAINER) as target:
+                output_stream = target.add_stream(AUDIO_CODEC, rate=AUDIO_SAMPLE_RATE, layout=AUDIO_LAYOUT)
+                for frame in source.decode(input_stream):
+                    for resampled in resampler.resample(frame):
+                        target.mux(output_stream.encode(resampled))
+                # Flush the resampler and the encoder so no trailing samples are lost.
+                for resampled in resampler.resample(None):
+                    target.mux(output_stream.encode(resampled))
+                target.mux(output_stream.encode(None))
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_AUDIO_EXTRACTION_FAILED.format(details=exc)) from exc
 
     return output_wav_path
 
