@@ -1,0 +1,64 @@
+from datetime import datetime, timezone
+from typing import Optional
+
+from pydantic import BaseModel
+
+from app.core.config import (
+    JSON_DUMP_MODE,
+    METADATA_FILE,
+    STREAM_TYPE_AUDIO,
+    STREAM_TYPE_VIDEO,
+    SourceType,
+)
+from app.services.storage.local import LocalStorage
+from app.services.video.ingestion import MediaInfo
+
+
+class TechnicalMetadata(BaseModel):
+    source_type: SourceType
+    source: str
+    container: str
+    duration_seconds: Optional[float] = None
+    size_bytes: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    aspect_ratio: Optional[str] = None
+    frame_rate: Optional[float] = None
+    video_codec: str
+    audio_codec: str
+    sample_rate: Optional[int] = None
+    channels: Optional[int] = None
+    created_at: datetime
+
+
+# Collect the technical metadata of the original source from its inspection result.
+# Source: MS2 FR02 – Step 6 (runtime, dimensions, aspect ratio, frame rate, sample rate, source URL or file name).
+def build_technical_metadata(media: MediaInfo, source_type: SourceType, source: str) -> TechnicalMetadata:
+    """Build the metadata record; `source` is the original URL or the uploaded file name."""
+    video = media.streams_of(STREAM_TYPE_VIDEO)[0]
+    audio = media.streams_of(STREAM_TYPE_AUDIO)[0]
+    return TechnicalMetadata(
+        source_type=source_type,
+        source=source,
+        container=media.format_name,
+        duration_seconds=media.duration_seconds,
+        size_bytes=media.size_bytes,
+        width=video.width,
+        height=video.height,
+        aspect_ratio=video.aspect_ratio,
+        frame_rate=video.frame_rate,
+        video_codec=video.codec_name,
+        audio_codec=audio.codec_name,
+        sample_rate=audio.sample_rate,
+        channels=audio.channels,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def save_technical_metadata(storage: LocalStorage, project_id: str, metadata: TechnicalMetadata) -> None:
+    storage.write_json(project_id, METADATA_FILE, metadata.model_dump(mode=JSON_DUMP_MODE))
+
+
+def get_technical_metadata(storage: LocalStorage, project_id: str) -> Optional[TechnicalMetadata]:
+    data = storage.read_json(project_id, METADATA_FILE)
+    return TechnicalMetadata.model_validate(data) if data is not None else None

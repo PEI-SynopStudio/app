@@ -102,6 +102,35 @@ ERROR_UNREADABLE_MEDIA = "Corrupted or unreadable media file: {details}"
 ERROR_NO_AUDIO_STREAM = "Video rejected: does not contain any decodable audio stream."
 ERROR_AUDIO_EXTRACTION_FAILED = "Failed to extract normalized audio: {details}"
 
+# --- Supported formats (FR02 whitelist, checked on the server) ---
+# PyAV reports the demuxer as a comma-separated list, e.g. "mov,mp4,m4a,3gp,3g2,mj2".
+ALLOWED_CONTAINER_FORMATS = ("mov", "mp4", "matroska", "webm", "avi")
+ERROR_UNSUPPORTED_CONTAINER = "Video rejected: container format {format_name!r} is not supported."
+ERROR_UNSUPPORTED_VIDEO_CODEC = "Video rejected: video codec {codec!r} is not supported."
+ERROR_UNSUPPORTED_AUDIO_CODEC = "Video rejected: audio codec {codec!r} is not supported."
+
+# --- Silence detection on the normalized WAV ---
+SILENCE_THRESHOLD_DBFS = -50.0
+SILENCE_WINDOW_SECONDS = 1
+PCM_SAMPLE_TYPECODE = "h"
+PCM_FULL_SCALE = 32768
+DECIBEL_FACTOR = 20
+DECIBEL_BASE = 10
+WAV_READ_MODE = "rb"
+WAV_BYTE_ORDER = "little"
+ERROR_SILENT_AUDIO = (
+    "Video rejected: the audio track is silent (no window louder than {threshold} dBFS)."
+)
+
+# --- Technical metadata (FR02 step 6) ---
+METADATA_FILE = "metadata.json"
+ASPECT_RATIO_FORMAT = "{numerator}:{denominator}"
+
+
+class SourceType(str, Enum):
+    UPLOAD = "upload"
+    URL = "url"
+
 # --- Proxy video (PyAV) ---
 PROXY_MAX_HEIGHT = 720
 EVEN_DIMENSION = 2
