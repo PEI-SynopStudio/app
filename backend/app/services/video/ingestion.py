@@ -1,6 +1,5 @@
-import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import av
 from pydantic import BaseModel
@@ -17,8 +16,21 @@ from app.core.config import (
     ERROR_DOWNLOAD_FAILED,
     ERROR_FILE_NOT_FOUND,
     ERROR_NO_AUDIO_STREAM,
+    ERROR_NO_VIDEO_STREAM,
+    ERROR_PROXY_FAILED,
     ERROR_UNREADABLE_MEDIA,
+    EVEN_DIMENSION,
     MEDIA_WRITE_MODE,
+    PROXY_AUDIO_BITRATE,
+    PROXY_AUDIO_CODEC,
+    PROXY_AUDIO_FRAME_SIZE,
+    PROXY_AUDIO_SAMPLE_FORMAT,
+    PROXY_CONTAINER,
+    PROXY_MAX_HEIGHT,
+    PROXY_MUXER_OPTIONS,
+    PROXY_PIXEL_FORMAT,
+    PROXY_VIDEO_CODEC,
+    PROXY_VIDEO_OPTIONS,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
     YTDLP_FORMAT_SORT,
@@ -28,6 +40,7 @@ from app.core.config import (
     YTDLP_OUTPUT_TEMPLATE,
     YTDLP_REMUXER,
 )
+
 
 class StreamInfo(BaseModel):
     index: int
@@ -48,8 +61,6 @@ class MediaInfo(BaseModel):
 
     def streams_of(self, codec_type: str) -> List[StreamInfo]:
         return [stream for stream in self.streams if stream.codec_type == codec_type]
-
-
 
 
 # Inspect the container with PyAV; reject unreadable files and files without audio.
@@ -118,40 +129,73 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
     return output_wav_path
 
 
-# ==============================================================================
-# Generate a 720p H.264 proxy with +faststart for web playback and scrubbing.
+# Generate a lightweight H.264/AAC proxy (max 720p, +faststart) with PyAV for web playback and scrubbing.
 # Source: MS2 FR02 – Step 5 (Visual Proxy); +faststart from the professor's `find_me.py`.
-# ==============================================================================
 def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
-    """Generate a lightweight 720p H.264 proxy video for timeline scrubbing and web preview."""
+    """Generate a lightweight proxy video (H.264, max 720p, AAC, +faststart) for timeline scrubbing and web preview."""
     output_proxy_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(video_path),
-        "-vf", "scale=-2:720",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "26",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(output_proxy_path),
-    ]
+    try:
+        with av.open(str(video_path)) as source:
+            if not source.streams.video:
+                raise ValueError(ERROR_NO_VIDEO_STREAM)
+            video_in = source.streams.video[0]
+            audio_in = source.streams.audio[0] if source.streams.audio else None
+            width, height = _proxy_size(video_in.codec_context.width, video_in.codec_context.height)
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            with av.open(
+                str(output_proxy_path), MEDIA_WRITE_MODE, format=PROXY_CONTAINER, options=PROXY_MUXER_OPTIONS
+            ) as target:
+                video_out = target.add_stream(PROXY_VIDEO_CODEC, rate=video_in.average_rate)
+                video_out.width, video_out.height, video_out.pix_fmt = width, height, PROXY_PIXEL_FORMAT
+                video_out.options = dict(PROXY_VIDEO_OPTIONS)
 
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to generate proxy video: {result.stderr.strip()}")
+                input_streams = [video_in]
+                audio_out = resampler = None
+                if audio_in is not None:
+                    sample_rate = audio_in.codec_context.sample_rate
+                    audio_out = target.add_stream(PROXY_AUDIO_CODEC, rate=sample_rate)
+                    audio_out.bit_rate = PROXY_AUDIO_BITRATE
+                    resampler = av.AudioResampler(
+                        format=PROXY_AUDIO_SAMPLE_FORMAT,
+                        layout=audio_in.codec_context.layout.name,
+                        rate=sample_rate,
+                        frame_size=PROXY_AUDIO_FRAME_SIZE,
+                    )
+                    input_streams.append(audio_in)
+
+                # Single pass over the source: packets are demuxed in order and routed by stream type.
+                for packet in source.demux(*input_streams):
+                    for frame in packet.decode():
+                        if packet.stream.type == STREAM_TYPE_VIDEO:
+                            scaled = frame.reformat(width=width, height=height, format=PROXY_PIXEL_FORMAT)
+                            target.mux(video_out.encode(scaled))
+                        else:
+                            for chunk in resampler.resample(frame):
+                                target.mux(audio_out.encode(chunk))
+
+                # Flush the encoders (and the resampler) so no trailing frames are lost.
+                target.mux(video_out.encode(None))
+                if audio_out is not None:
+                    for chunk in resampler.resample(None):
+                        target.mux(audio_out.encode(chunk))
+                    target.mux(audio_out.encode(None))
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_PROXY_FAILED.format(details=exc)) from exc
 
     return output_proxy_path
 
 
-# ==============================================================================
-# Download a YouTube video, or only a time interval of it, to MP4 with yt-dlp.
-# Source: professor's `youtube_interval.py`; MS2 FR02 / US05 (time range to import).
-# ==============================================================================
+def _proxy_size(width: int, height: int) -> Tuple[int, int]:
+    """Scale to at most PROXY_MAX_HEIGHT keeping the aspect ratio; H.264 needs even dimensions."""
+    target_height = min(height, PROXY_MAX_HEIGHT)
+    target_height -= target_height % EVEN_DIMENSION
+    target_width = round(width * target_height / height / EVEN_DIMENSION) * EVEN_DIMENSION
+    return target_width, target_height
+
+
+# Download a YouTube video, or only a time interval of it, to MP4 (max 1080p) with the yt-dlp API.
+# Source: professor's `youtube_interval.py`; MS2 FR02 – Step 2 / US05 (time range to import).
 def download_youtube_video(
     url: str,
     output_path: Path,

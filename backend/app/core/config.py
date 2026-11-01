@@ -82,6 +82,21 @@ ERROR_UNREADABLE_MEDIA = "Corrupted or unreadable media file: {details}"
 ERROR_NO_AUDIO_STREAM = "Video rejected: does not contain any decodable audio stream."
 ERROR_AUDIO_EXTRACTION_FAILED = "Failed to extract normalized audio: {details}"
 
+# --- Proxy video (PyAV) ---
+PROXY_MAX_HEIGHT = 720
+EVEN_DIMENSION = 2
+PROXY_CONTAINER = "mp4"
+PROXY_MUXER_OPTIONS = {"movflags": "+faststart"}
+PROXY_VIDEO_CODEC = "libx264"
+PROXY_PIXEL_FORMAT = "yuv420p"
+PROXY_VIDEO_OPTIONS = {"preset": "veryfast", "crf": "26"}
+PROXY_AUDIO_CODEC = "aac"
+PROXY_AUDIO_BITRATE = 128_000
+PROXY_AUDIO_SAMPLE_FORMAT = "fltp"
+PROXY_AUDIO_FRAME_SIZE = 1024
+ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
+ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
+
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
