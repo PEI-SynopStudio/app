@@ -91,6 +91,13 @@ ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED = (
 ERROR_INTERNAL = "Unexpected error during ingestion; see the worker logs."
 LOG_INGESTION_FAILED = "Ingestion failed for project %s"
 
+# --- Job dispatch and events (in-process until the RabbitMQ worker exists) ---
+MEDIA_INGESTED_EVENT = "media.ingested"
+INGESTION_THREAD_NAME = "ingestion-{project_id}"
+ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
+LOG_EVENT_PUBLISHED = "Event %s published: %s"
+LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
+
 
 # --- yt-dlp (remote download) ---
 YTDLP_MAX_HEIGHT = 1080
