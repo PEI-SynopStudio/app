@@ -14,7 +14,6 @@ DEFAULT_ALLOWED_VIDEO_CODECS = "h264,hevc,vp9,av1"
 DEFAULT_ALLOWED_AUDIO_CODECS = "aac,mp3,opus,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le"
 DEFAULT_MAX_DURATION_SECONDS = 4 * 3600
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024**3
-DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 6 * 3600
 LIST_SEPARATOR = ","
 
 # --- Storage layout ---
@@ -68,6 +67,27 @@ YTDLP_OUTPUT_TEMPLATE = "{stem}.%(ext)s"
 YTDLP_REMUXER = "FFmpegVideoRemuxer"
 ERROR_DOWNLOAD_FAILED = "Failed to download video with yt-dlp: {details}"
 
+# --- Remote sources: URL validation and yt-dlp probe ---
+ALLOWED_URL_SCHEMES = ("http", "https")
+DOMAIN_SEPARATOR = "."
+ALLOWED_AVAILABILITY = ("public", "unlisted")
+REJECTED_LIVE_STATUSES = ("is_live", "is_upcoming", "post_live")
+ERROR_INVALID_URL = "Invalid URL: only http and https links are accepted."
+ERROR_DOMAIN_NOT_ALLOWED = "Source domain not allowed: {domain}"
+ERROR_VIDEO_UNAVAILABLE = "Video is not accessible: {details}"
+ERROR_VIDEO_NOT_PUBLIC = (
+    "Video rejected: only public or unlisted videos can be imported (availability: {availability})."
+)
+ERROR_VIDEO_IS_LIVE = "Video rejected: live or upcoming streams can only be imported after they have ended."
+ERROR_DURATION_UNKNOWN = "Video rejected: its duration could not be determined."
+ERROR_DURATION_EXCEEDED = "Video rejected: duration {duration:.0f} s exceeds the limit of {limit} s."
+ERROR_TIME_RANGE_INCOMPLETE = "Both start and end times are required to import a time range."
+ERROR_INVALID_TIMECODE = "Invalid timecode: {value!r}"
+ERROR_INVALID_TIME_RANGE = (
+    "Invalid time range: start ({start:.0f} s) must be before end ({end:.0f} s), "
+    "and end must not exceed the video duration ({duration:.0f} s)."
+)
+
 # --- Media inspection and audio normalization (PyAV) ---
 STREAM_TYPE_AUDIO = "audio"
 STREAM_TYPE_VIDEO = "video"
@@ -113,7 +133,6 @@ class Settings:
     allowed_audio_codecs: Tuple[str, ...]
     max_duration_seconds: int
     max_upload_bytes: int
-    subprocess_timeout_seconds: int
 
 
 @lru_cache
@@ -128,7 +147,4 @@ def get_settings() -> Settings:
         allowed_audio_codecs=_csv("ALLOWED_AUDIO_CODECS", DEFAULT_ALLOWED_AUDIO_CODECS),
         max_duration_seconds=int(os.environ.get("MAX_DURATION_SECONDS", DEFAULT_MAX_DURATION_SECONDS)),
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
-        subprocess_timeout_seconds=int(
-            os.environ.get("SUBPROCESS_TIMEOUT_SECONDS", DEFAULT_SUBPROCESS_TIMEOUT_SECONDS)
-        ),
     )
