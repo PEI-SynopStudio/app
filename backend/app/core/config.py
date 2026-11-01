@@ -58,6 +58,40 @@ class IngestionStage(str, Enum):
     FAILED = "ingestion_failed"
 
 
+# Progress messages shown to the user for each stage (FR02 outputs).
+STAGE_MESSAGES = {
+    IngestionStage.QUEUED: "Waiting to start",
+    IngestionStage.DOWNLOADING: "Downloading from URL",
+    IngestionStage.INSPECTING: "Inspecting media",
+    IngestionStage.EXTRACTING_AUDIO: "Extracting audio",
+    IngestionStage.GENERATING_PROXY: "Generating preview video",
+    IngestionStage.ANALYSING: "Saving technical metadata",
+    IngestionStage.COMPLETED: "Ingestion completed",
+}
+
+
+class IngestionErrorCode(str, Enum):
+    LICENCE_NOT_CONFIRMED = "licence_not_confirmed"
+    MEDIA_REJECTED = "media_rejected"
+    PROCESSING_FAILED = "processing_failed"
+    INTERNAL_ERROR = "internal_error"
+
+
+# --- Ingestion pipeline: per-project file layout ---
+SOURCE_DIR = "source"
+AUDIO_DIR = "audio"
+PROXY_DIR = "proxy"
+DOWNLOAD_FILE = "original.mp4"
+AUDIO_FILE = "audio.wav"
+PROXY_FILE = "proxy.mp4"
+ERROR_INVALID_STAGED_FILE = "Invalid staged file name: {name!r}"
+ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED = (
+    "Time ranges are not supported for uploaded files yet; upload the full recording."
+)
+ERROR_INTERNAL = "Unexpected error during ingestion; see the worker logs."
+LOG_INGESTION_FAILED = "Ingestion failed for project %s"
+
+
 # --- yt-dlp (remote download) ---
 YTDLP_MAX_HEIGHT = 1080
 YTDLP_FORMAT_TEMPLATE = "bv*[height<={max_height}]+ba/b[height<={max_height}]"
