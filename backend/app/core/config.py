@@ -44,6 +44,12 @@ ROUTE_ROOT = ""
 PROJECTS_ROUTE_PREFIX = "/projects"
 PROJECTS_ROUTE_TAG = "projects"
 PROJECT_ID_ROUTE = "/{project_id}"
+INGESTION_ROUTE_TAG = "ingestion"
+URL_INGESTION_ROUTE = "/{project_id}/ingestions/url"
+INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
+URL_MAX_LENGTH = 2048
+TIMECODE_MAX_LENGTH = 16
+ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
 
 
 # --- Ingestion stages (FR02) ---
