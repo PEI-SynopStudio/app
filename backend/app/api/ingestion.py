@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     ERROR_INGESTION_NOT_STARTED,
     INGESTION_ROUTE_TAG,
@@ -14,11 +15,11 @@ from app.core.config import (
     URL_MAX_LENGTH,
     SourceType,
 )
-from app.services.projects.projects import LicenceNotConfirmedError, ProjectNotFoundError, get_project
+from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.metadata import TechnicalMetadata, get_technical_metadata
 from app.services.video.sources import validate_source_url, validate_time_range
-from app.services.workflow.dispatcher import IngestionAlreadyRunningError, JobDispatcher, get_dispatcher
+from app.services.workflow.dispatcher import JobDispatcher, get_dispatcher
 from app.services.workflow.ingestion_pipeline import IngestionJob
 from app.services.workflow.status import IngestionStatus, get_status
 
@@ -34,19 +35,6 @@ class UrlIngestionRequest(BaseModel):
 class IngestionOverview(BaseModel):
     status: IngestionStatus
     metadata: Optional[TechnicalMetadata] = None
-
-
-def _http_error(exc: Exception) -> HTTPException:
-    """Map service exceptions to HTTP errors with the original, descriptive message."""
-    if isinstance(exc, ProjectNotFoundError):
-        code = status.HTTP_404_NOT_FOUND
-    elif isinstance(exc, LicenceNotConfirmedError):
-        code = status.HTTP_403_FORBIDDEN
-    elif isinstance(exc, IngestionAlreadyRunningError):
-        code = status.HTTP_409_CONFLICT
-    else:
-        code = status.HTTP_422_UNPROCESSABLE_CONTENT
-    return HTTPException(status_code=code, detail=str(exc))
 
 
 # Accept an authorised link and queue its ingestion; the slow checks (yt-dlp probe) run in the job.
@@ -70,8 +58,8 @@ def ingest_url(
             end_time=body.end_time,
         )
         return dispatcher.dispatch(job)
-    except (ValueError, ProjectNotFoundError, LicenceNotConfirmedError, IngestionAlreadyRunningError) as exc:
-        raise _http_error(exc) from exc
+    except SERVICE_ERRORS as exc:
+        raise http_error(exc) from exc
 
 
 # Return the current ingestion stage (or the failure details) and, once saved, the technical metadata.
@@ -80,8 +68,8 @@ def ingest_url(
 def read_ingestion(project_id: str, storage: LocalStorage = Depends(get_storage)):
     try:
         get_project(storage, project_id)
-    except (ValueError, ProjectNotFoundError) as exc:
-        raise _http_error(exc) from exc
+    except SERVICE_ERRORS as exc:
+        raise http_error(exc) from exc
 
     current = get_status(storage, project_id)
     if current is None:

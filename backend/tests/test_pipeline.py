@@ -198,3 +198,15 @@ def test_url_time_range_beyond_duration_fails(storage, project_id, monkeypatch):
 
     assert (status.stage, status.error.code) == (IngestionStage.FAILED, "media_rejected")
     assert "Invalid time range" in status.error.message
+
+
+def test_new_run_clears_previous_metadata(storage, project_id, make_sample):
+    run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
+    assert get_technical_metadata(storage, project_id) is not None
+
+    status, _ = run(storage, IngestionJob(
+        project_id=project_id, source_type=SourceType.URL, source="https://example.com/video.mp4"
+    ))
+
+    assert status.stage == IngestionStage.FAILED
+    assert get_technical_metadata(storage, project_id) is None

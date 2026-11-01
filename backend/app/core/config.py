@@ -14,6 +14,8 @@ DEFAULT_ALLOWED_VIDEO_CODECS = "h264,hevc,vp9,av1"
 DEFAULT_ALLOWED_AUDIO_CODECS = "aac,mp3,opus,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le"
 DEFAULT_MAX_DURATION_SECONDS = 4 * 3600
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024**3
+DEFAULT_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024**2
+DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 
 # --- Storage layout ---
@@ -38,6 +40,9 @@ PROJECT_TITLE_MAX_LENGTH = 300
 
 # --- API ---
 APP_TITLE = "PEI API"
+# Only the application's own loggers ("app.*"); uvicorn and the media libraries keep their settings.
+APP_LOGGER_NAME = "app"
+LOG_FORMAT = "%(levelname)s:     %(name)s - %(message)s"
 HEALTH_ROUTE = "/health"
 HEALTH_OK = "ok"
 ROUTE_ROOT = ""
@@ -50,6 +55,13 @@ INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
 URL_MAX_LENGTH = 2048
 TIMECODE_MAX_LENGTH = 16
 ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
+UPLOADS_ROUTE = "/{project_id}/uploads"
+UPLOAD_ROUTE = "/{project_id}/uploads/{upload_id}"
+UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
+UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
+FILE_NAME_MIN_LENGTH = 1
+FILE_NAME_MAX_LENGTH = 255
+CONTENT_TYPE_MAX_LENGTH = 100
 
 
 # --- Ingestion stages (FR02) ---
@@ -103,6 +115,35 @@ INGESTION_THREAD_NAME = "ingestion-{project_id}"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
 LOG_EVENT_PUBLISHED = "Event %s published: %s"
 LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
+
+# --- Chunked upload (FR02 step 1) ---
+UPLOADS_DIR = "uploads"
+UPLOAD_SESSION_FILE = "session.json"
+UPLOAD_CHUNKS_DIR = "chunks"
+CHUNK_FILE_FORMAT = "{index:06d}"
+EXTENSION_SEPARATOR = "."
+FILE_READ_MODE = "rb"
+FILE_WRITE_MODE = "wb"
+COPY_BUFFER_BYTES = 1024**2
+# MIME types browsers report for the allowed containers; an empty type is accepted (the server inspects content).
+ALLOWED_UPLOAD_MIME_TYPES = (
+    "video/mp4",
+    "video/quicktime",
+    "video/x-matroska",
+    "video/webm",
+    "video/x-msvideo",
+    "video/avi",
+    "video/msvideo",
+)
+ERROR_UNSUPPORTED_EXTENSION = "File rejected: extension {extension!r} is not supported (allowed: {allowed})."
+ERROR_UNSUPPORTED_MIME_TYPE = "File rejected: MIME type {content_type!r} is not a supported video type."
+ERROR_UPLOAD_EMPTY = "File rejected: the file is empty."
+ERROR_UPLOAD_TOO_LARGE = "File rejected: {size} bytes exceeds the upload limit of {limit} bytes."
+ERROR_INVALID_UPLOAD_ID = "Invalid upload ID: {upload_id!r}"
+ERROR_UPLOAD_NOT_FOUND = "Upload not found: {upload_id}"
+ERROR_CHUNK_INDEX_OUT_OF_RANGE = "Chunk index {index} is out of range (0 to {last})."
+ERROR_CHUNK_SIZE_MISMATCH = "Chunk {index} must be {expected} bytes, got {actual}."
+ERROR_UPLOAD_INCOMPLETE = "Upload incomplete: {count} chunk(s) missing, starting at index {first}."
 
 
 # --- yt-dlp (remote download) ---
@@ -209,6 +250,8 @@ class Settings:
     allowed_audio_codecs: Tuple[str, ...]
     max_duration_seconds: int
     max_upload_bytes: int
+    upload_chunk_size_bytes: int
+    log_level: str
 
 
 @lru_cache
@@ -223,4 +266,6 @@ def get_settings() -> Settings:
         allowed_audio_codecs=_csv("ALLOWED_AUDIO_CODECS", DEFAULT_ALLOWED_AUDIO_CODECS),
         max_duration_seconds=int(os.environ.get("MAX_DURATION_SECONDS", DEFAULT_MAX_DURATION_SECONDS)),
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
+        upload_chunk_size_bytes=int(os.environ.get("UPLOAD_CHUNK_SIZE_BYTES", DEFAULT_UPLOAD_CHUNK_SIZE_BYTES)),
+        log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
     )

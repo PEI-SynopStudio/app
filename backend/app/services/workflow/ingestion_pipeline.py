@@ -23,7 +23,7 @@ from app.core.config import (
     SourceType,
     get_settings,
 )
-from app.services.projects.projects import LicenceNotConfirmedError, require_ingestion_allowed
+from app.services.projects.projects import LicenceNotConfirmedError, get_project, require_ingestion_allowed
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     check_audio_not_silent,
@@ -33,7 +33,11 @@ from app.services.video.ingestion import (
     generate_proxy_video,
     inspect_media,
 )
-from app.services.video.metadata import build_technical_metadata, save_technical_metadata
+from app.services.video.metadata import (
+    build_technical_metadata,
+    clear_technical_metadata,
+    save_technical_metadata,
+)
 from app.services.video.sources import probe_remote_video, validate_time_range
 from app.services.workflow.status import IngestionStatus, mark_failed, set_stage
 
@@ -74,6 +78,10 @@ def run_ingestion(
         status = mark_failed(storage, project_id, code.value, message)
         _notify(on_progress, status)
         return status
+
+    get_project(storage, project_id)
+    # A new run replaces the previous one: its old metadata must not be shown next to the new status.
+    clear_technical_metadata(storage, project_id)
 
     try:
         require_ingestion_allowed(storage, project_id)

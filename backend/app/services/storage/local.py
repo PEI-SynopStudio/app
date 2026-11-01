@@ -56,6 +56,10 @@ class LocalStorage:
             raise
         return target
 
+    def delete(self, project_id: str, name: str) -> None:
+        """Remove a file of the project if it exists."""
+        (self.project_dir(project_id) / name).unlink(missing_ok=True)
+
     def read_json(self, project_id: str, name: str) -> Optional[Dict[str, Any]]:
         target = self.project_dir(project_id) / name
         if not target.exists():
