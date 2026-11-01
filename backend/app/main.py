@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 
-app = FastAPI(title="PEI API")
+from app.api import projects
+from app.core.config import APP_TITLE, HEALTH_OK, HEALTH_ROUTE
 
-@app.get("/health")
+app = FastAPI(title=APP_TITLE)
+app.include_router(projects.router)
+
+@app.get(HEALTH_ROUTE)
 def health():
-    return {"status": "ok"}
+    return {"status": HEALTH_OK}

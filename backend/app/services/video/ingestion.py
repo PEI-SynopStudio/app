@@ -8,25 +8,8 @@ MEDIA_ROOT = Path("/data/media")
 
 
 # ==============================================================================
-# Function: inspect_media
-# ------------------------------------------------------------------------------
-# Description:
-#   Inspects the multimedia container using ffprobe to validate stream
-#   integrity and verify the presence of at least one decodable audio track.
-#   Unreadable, corrupted, or silent files are rejected immediately.
-#
-# Arguments:
-#   - input_path (Path): Path to the video/audio file to inspect.
-#
-# Returns:
-#   - Dict[str, Any]: Parsed JSON metadata containing stream and format details.
-#
-# Sources & Provenance:
-#   - Command structure (-v error, -show_entries, -of json):
-#       Adapted from `fujiwarachoki/supoclip` (`backend/src/media/ffmpeg.py`).
-#   - Business rule (reject unreadable or silent files without decodable audio):
-#       Derived directly from Milestone 2 specification (`MS2-Elaboration.pdf`,
-#       FR02 - Step 3: Container and Stream Integrity Inspection).
+# Inspect the container with ffprobe; reject unreadable files and files without audio.
+# Source: MS2 FR02 - Step 3 (Container and Stream Integrity Inspection)
 # ==============================================================================
 def inspect_media(input_path: Path) -> Dict[str, Any]:
     """Inspect media container integrity and verify the existence of a decodable audio stream."""
@@ -58,26 +41,8 @@ def inspect_media(input_path: Path) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# Function: extract_normalized_audio
-# ------------------------------------------------------------------------------
-# Description:
-#   Isolates the audio stream from the source video, removes the video track
-#   (-vn), and normalizes it to uncompressed 16 kHz, 16-bit mono PCM WAV format.
-#   This standardized format is required by Whisper speech recognition models.
-#
-# Arguments:
-#   - video_path (Path): Path to the source video file.
-#   - output_wav_path (Path): Destination path for the normalized .wav file.
-#
-# Returns:
-#   - Path: Path to the generated normalized .wav file.
-#
-# Sources & Provenance:
-#   - Base ffmpeg invocation and video discarding (-vn):
-#       Adapted from `fujiwarachoki/supoclip` (`backend/src/media/ffmpeg.py` - extract_audio).
-#   - Audio normalization parameters (-acodec pcm_s16le, -ar 16000, -ac 1):
-#       Configured strictly according to Milestone 2 requirements (`MS2-Elaboration.pdf`,
-#       FR02 - Step 4: Audio Extraction and Normalization).
+# Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input).
+# Source: MS2 FR02 – Step 4 (Audio Extraction and Normalization).
 # ==============================================================================
 def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
     """Extract and normalize audio stream to uncompressed 16 kHz, 16-bit mono PCM WAV."""
@@ -103,26 +68,8 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
 
 
 # ==============================================================================
-# Function: generate_proxy_video
-# ------------------------------------------------------------------------------
-# Description:
-#   Generates a lightweight 720p H.264 proxy video with progressive download
-#   flags (+faststart) to ensure smooth playback and scrubbing in the web editor
-#   without consuming high network bandwidth.
-#
-# Arguments:
-#   - video_path (Path): Path to the high-resolution source video file.
-#   - output_proxy_path (Path): Destination path for the generated proxy video.
-#
-# Returns:
-#   - Path: Path to the generated proxy video file.
-#
-# Sources & Provenance:
-#   - Proxy resolution (720p H.264):
-#       Mandated by Milestone 2 specification (`MS2-Elaboration.pdf`,
-#       FR02 - Step 5: Visual Proxy and Keyframe Generation).
-#   - Streaming optimization (-movflags +faststart):
-#       Derived from the professor's script `find_me.py` (`export_clips` function).
+# Generate a 720p H.264 proxy with +faststart for web playback and scrubbing.
+# Source: MS2 FR02 – Step 5 (Visual Proxy); +faststart from the professor's `find_me.py`.
 # ==============================================================================
 def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
     """Generate a lightweight 720p H.264 proxy video for timeline scrubbing and web preview."""
@@ -151,28 +98,8 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
 
 
 # ==============================================================================
-# Function: download_youtube_video
-# ------------------------------------------------------------------------------
-# Description:
-#   Downloads a video from a YouTube URL via yt-dlp. Supports selective interval
-#   downloading via time boundaries, forcing keyframe cuts to ensure clean edits
-#   without downloading unneeded footage.
-#
-# Arguments:
-#   - url (str): Valid YouTube video HTTP/HTTPS URL.
-#   - output_path (Path): Target MP4 file destination path.
-#   - start_time (Optional[str]): Start timestamp (e.g., '00:01:00').
-#   - end_time (Optional[str]): End timestamp (e.g., '00:03:30').
-#
-# Returns:
-#   - Path: Path to the downloaded MP4 file.
-#
-# Sources & Provenance:
-#   - CLI command execution and interval slicing (--download-sections, --force-keyframes-at-cuts):
-#       Directly extracted from the professor's script `youtube_interval.py` (lines 53-65).
-#   - Remote URL ingestion requirements and partial range handling:
-#       Aligned with Milestone 2 specification (`MS2-Elaboration.pdf`,
-#       FR02 / US05: "specify the time range to import").
+# Download a YouTube video, or only a time interval of it, to MP4 with yt-dlp.
+# Source: professor's `youtube_interval.py`; MS2 FR02 / US05 (time range to import).
 # ==============================================================================
 def download_youtube_video(
     url: str,
