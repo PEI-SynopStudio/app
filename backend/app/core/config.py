@@ -59,6 +59,16 @@ class IngestionStage(str, Enum):
     FAILED = "ingestion_failed"
 
 
+# --- yt-dlp (remote download) ---
+YTDLP_MAX_HEIGHT = 1080
+YTDLP_FORMAT_TEMPLATE = "bv*[height<={max_height}]+ba/b[height<={max_height}]"
+YTDLP_FORMAT_SORT = ("vcodec:h264", "lang", "quality", "res", "fps", "hdr:12", "acodec:aac")
+YTDLP_OUTPUT_CONTAINER = "mp4"
+YTDLP_OUTPUT_TEMPLATE = "{stem}.%(ext)s"
+YTDLP_REMUXER = "FFmpegVideoRemuxer"
+ERROR_DOWNLOAD_FAILED = "Failed to download video with yt-dlp: {details}"
+
+
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())

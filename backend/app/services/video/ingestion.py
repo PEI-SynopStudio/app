@@ -3,6 +3,19 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError, download_range_func, parse_duration
+
+from app.core.config import (
+    ERROR_DOWNLOAD_FAILED,
+    YTDLP_FORMAT_SORT,
+    YTDLP_FORMAT_TEMPLATE,
+    YTDLP_MAX_HEIGHT,
+    YTDLP_OUTPUT_CONTAINER,
+    YTDLP_OUTPUT_TEMPLATE,
+    YTDLP_REMUXER,
+)
+
 # Root directory mounted via Docker volume (/data/media)
 MEDIA_ROOT = Path("/data/media")
 
@@ -107,28 +120,32 @@ def download_youtube_video(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
 ) -> Path:
-    """Download a video or specific section from YouTube to an MP4 container using yt-dlp."""
+    """Download a video or a time range of it to an MP4 container (max 1080p) using the yt-dlp Python API."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--no-overwrites",
-        "-t", "mp4",
-        "-o", str(output_path),
-    ]
+    options = {
+        "noplaylist": True,
+        "overwrites": False,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "format": YTDLP_FORMAT_TEMPLATE.format(max_height=YTDLP_MAX_HEIGHT),
+        "format_sort": list(YTDLP_FORMAT_SORT),
+        "merge_output_format": YTDLP_OUTPUT_CONTAINER,
+        "postprocessors": [{"key": YTDLP_REMUXER, "preferedformat": YTDLP_OUTPUT_CONTAINER}],
+        "outtmpl": str(output_path.with_name(YTDLP_OUTPUT_TEMPLATE.format(stem=output_path.stem))),
+    }
 
     if start_time and end_time:
-        cmd.extend([
-            "--download-sections", f"*{start_time}-{end_time}",
-            "--force-keyframes-at-cuts",
-        ])
+        options["download_ranges"] = download_range_func(
+            None, [(parse_duration(start_time), parse_duration(end_time))]
+        )
+        options["force_keyframes_at_cuts"] = True
 
-    cmd.extend(["--", url])
+    try:
+        with YoutubeDL(options) as ydl:
+            ydl.download([url])
+    except DownloadError as exc:
+        raise RuntimeError(ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to download YouTube video with yt-dlp: {result.stderr.strip()}")
-
-    return output_path
+    return output_path.with_suffix(f".{YTDLP_OUTPUT_CONTAINER}")
