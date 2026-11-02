@@ -1,0 +1,89 @@
+/* =========================================================
+   Login / Cadastro
+   ========================================================= */
+
+.auth {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+.auth__aside {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 48px;
+  padding: 32px clamp(32px, 4vw, 56px);
+}
+
+.auth__wave {
+  height: 160px;
+}
+
+.auth__quote {
+  max-width: 14ch;
+  font-size: clamp(2rem, 3.2vw, 3rem);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.auth__main {
+  display: grid;
+  place-items: center;
+  padding: 48px var(--gutter);
+}
+
+.auth__panel {
+  display: grid;
+  gap: 28px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.auth__mobile-logo {
+  display: none;
+}
+
+.auth__title {
+  font-size: 2rem;
+  letter-spacing: -0.035em;
+}
+
+.auth__subtitle {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.auth__form {
+  display: grid;
+  gap: 16px;
+}
+
+.auth__form .btn {
+  margin-top: 8px;
+}
+
+.auth__footer {
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+
+.auth__footer a {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+@media (max-width: 959px) {
+  .auth {
+    grid-template-columns: 1fr;
+  }
+
+  .auth__aside {
+    display: none;
+  }
+
+  .auth__mobile-logo {
+    display: block;
+  }
+}

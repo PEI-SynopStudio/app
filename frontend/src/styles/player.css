@@ -1,0 +1,145 @@
+/* =========================================================
+   Clip player + captions (editor, viewer, style previews)
+   ========================================================= */
+
+.clip-player {
+  --player-h: clamp(280px, 52vh, 520px);
+  display: grid;
+  place-items: center;
+  min-height: calc(var(--player-h) + 48px);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  background:
+    repeating-linear-gradient(135deg, rgb(255 255 255 / 0.035) 0 14px, transparent 14px 28px),
+    var(--c-ink);
+}
+
+/* The frame takes the clip's format; its width is capped so the height never passes --player-h */
+.clip-player__frame {
+  position: relative;
+  container-type: inline-size;
+  display: grid;
+  place-items: center;
+  width: min(100%, calc(var(--player-h) * var(--ratio)));
+  aspect-ratio: var(--ratio);
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: var(--radius);
+  background: radial-gradient(120% 80% at 50% 30%, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.03));
+}
+
+.clip-player__play {
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--c-white);
+  color: var(--c-ink);
+  transition:
+    transform 120ms var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    background-color var(--dur-quick) var(--ease-out);
+}
+
+.clip-player__play svg {
+  width: 22px;
+  height: 22px;
+}
+
+.clip-player__play:hover {
+  background: var(--c-accent);
+}
+
+.clip-player__play:active {
+  transform: scale(0.94);
+}
+
+/* While playing, the button steps aside; it comes back on hover or focus */
+.clip-player.is-playing .clip-player__play {
+  opacity: 0;
+}
+
+.clip-player.is-playing .clip-player__frame:hover .clip-player__play,
+.clip-player.is-playing .clip-player__play:focus-visible {
+  opacity: 1;
+}
+
+.clip-player__time {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: rgb(255 255 255 / 0.7);
+}
+
+.clip-player__progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  height: 3px;
+  background: rgb(255 255 255 / 0.18);
+}
+
+.clip-player__progress span {
+  display: block;
+  height: 100%;
+  background: var(--c-accent);
+  transform-origin: 0 50%;
+}
+
+/* ---------- Captions (sized by the frame they sit in) ---------- */
+.caption {
+  position: absolute;
+  right: 8%;
+  bottom: 12%;
+  left: 8%;
+  z-index: 1;
+  font-size: max(11px, 5.5cqi);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--c-white);
+  pointer-events: none;
+}
+
+.caption--classic {
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.8),
+    0 0 12px rgb(0 0 0 / 0.5);
+}
+
+.caption--bold {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  text-shadow:
+    0 2px 0 var(--c-ink),
+    0 0 3px var(--c-ink);
+}
+
+.caption--boxed {
+  line-height: 1.6;
+}
+
+.caption--boxed span {
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  background: var(--c-white);
+  color: var(--c-ink);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.caption--minimal {
+  font-size: max(10px, 4.5cqi);
+  font-weight: 500;
+  opacity: 0.9;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+}

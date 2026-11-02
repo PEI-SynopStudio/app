@@ -1,0 +1,119 @@
+/* =========================================================
+   Viewer — public page for shared clips (no account needed)
+   ========================================================= */
+
+.viewer {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100dvh;
+}
+
+.viewer-header {
+  height: var(--header-h);
+  border-bottom: 1px solid var(--line);
+}
+
+.viewer-header__inner {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.viewer__main {
+  display: grid;
+  align-items: center;
+  padding-block: clamp(32px, 6vw, 72px);
+}
+
+.viewer__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(32px, 5vw, 64px);
+}
+
+.viewer__info {
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+}
+
+.viewer__title {
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.viewer__meta {
+  display: flex;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.viewer__source {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.viewer__ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.viewer__ai::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+
+.viewer__cta {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+
+.viewer__missing {
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+  max-width: 520px;
+}
+
+.viewer__missing p {
+  color: var(--muted);
+}
+
+@media (max-width: 899px) {
+  .viewer__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .viewer-header .btn {
+    display: none;
+  }
+}
