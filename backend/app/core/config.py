@@ -4,6 +4,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
+from __future__ import annotations
 
 # --- Defaults for environment-dependent settings ---
 DEFAULT_MEDIA_ROOT = "/data/media"
@@ -252,6 +253,9 @@ class Settings:
     max_upload_bytes: int
     upload_chunk_size_bytes: int
     log_level: str
+    whisper_model: str
+    default_language: str
+    database_url: str
 
 
 @lru_cache
@@ -268,4 +272,7 @@ def get_settings() -> Settings:
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
         upload_chunk_size_bytes=int(os.environ.get("UPLOAD_CHUNK_SIZE_BYTES", DEFAULT_UPLOAD_CHUNK_SIZE_BYTES)),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
+        whisper_model=os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
+        default_language=os.environ.get("DEFAULT_LANGUAGE", "pt")
+        database_url=os.environ.get("DATABASE_URL", "postgresql://pei:pei@postgres:5432/pei")
     )
