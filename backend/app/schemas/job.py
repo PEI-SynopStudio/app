@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.schemas.enums import AcousticProfileEnum, JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.schemas.timecode import parse_time
 
@@ -89,7 +89,7 @@ class TranscriptionParams(_StrictModel):
     
     job_type: Literal["transcription"] = "transcription"
     media_id: UUID
-    language: str = Field(default=settings.DEFAULT_LANGUAGE, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
+    language: str = Field(default=get_settings().default_language, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
     acoustic_profile: AcousticProfileEnum | None = None
 
 JobParameters = Annotated[IngestionParams | TranscriptionParams,Field(discriminator="job_type")]
