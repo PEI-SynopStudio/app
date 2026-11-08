@@ -1,9 +1,9 @@
 import shutil
+import uuid
 
 import pytest
 
 from app.core.config import IngestionStage, SourceType
-from app.services.projects.projects import create_project
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import download_youtube_video, inspect_media
 from app.services.video.metadata import get_technical_metadata
@@ -36,13 +36,13 @@ def test_download_youtube_time_range(tmp_path):
 def test_pipeline_ingests_youtube_time_range(tmp_path):
     """FR02 acceptance: a valid YouTube URL is staged without manual steps (needs network)."""
     storage = LocalStorage(tmp_path / "media")
-    project = create_project(storage, "Sample", licence_confirmed=True, authorship_confirmed=True)
+    project_id = str(uuid.uuid4())
     job = IngestionJob(
-        project_id=project.id, source_type=SourceType.URL, source=SAMPLE_URL,
+        project_id=project_id, source_type=SourceType.URL, source=SAMPLE_URL,
         start_time="00:01:07", end_time="00:01:27",
     )
 
     status = run_ingestion(storage, job)
 
     assert status.stage == IngestionStage.COMPLETED, status.error
-    assert get_technical_metadata(storage, project.id).source == SAMPLE_URL
+    assert get_technical_metadata(storage, project_id).source == SAMPLE_URL

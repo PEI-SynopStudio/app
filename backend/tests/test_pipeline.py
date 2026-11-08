@@ -4,7 +4,6 @@ import uuid
 import pytest
 
 from app.core.config import IngestionStage, SourceType, get_settings
-from app.services.projects.projects import ProjectNotFoundError, create_project
 from app.services.storage.local import LocalStorage
 from app.services.video.metadata import get_technical_metadata
 from app.services.video.sources import RemoteVideoInfo
@@ -28,8 +27,8 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def project_id(storage):
-    return create_project(storage, "Debate", licence_confirmed=True, authorship_confirmed=True).id
+def project_id():
+    return str(uuid.uuid4())
 
 
 def stage_upload(storage, project_id, sample, name="lecture.mp4"):
@@ -117,25 +116,6 @@ def test_upload_time_range_is_not_supported_yet(storage, project_id, make_sample
     status, _ = run(storage, job)
 
     assert "not supported for uploaded files" in status.error.message
-
-
-def test_licence_not_confirmed_fails(storage, make_sample):
-    project_id = create_project(storage, "Debate", licence_confirmed=False, authorship_confirmed=True).id
-    job = stage_upload(storage, project_id, make_sample(tone=True))
-
-    status, stages = run(storage, job)
-
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "licence_not_confirmed")
-    assert stages == [IngestionStage.FAILED]
-
-
-def test_unknown_project_raises_and_writes_nothing(storage):
-    project_id = str(uuid.uuid4())
-    job = IngestionJob(project_id=project_id, source_type=SourceType.UPLOAD, source="x.mp4", staged_file="x.mp4")
-
-    with pytest.raises(ProjectNotFoundError):
-        run_ingestion(storage, job)
-    assert not storage.project_exists(project_id)
 
 
 def test_unexpected_error_is_recorded_and_raised(storage, project_id, make_sample, monkeypatch):

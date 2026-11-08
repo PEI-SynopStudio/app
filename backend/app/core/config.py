@@ -96,7 +96,6 @@ STAGE_MESSAGES = {
 
 
 class IngestionErrorCode(str, Enum):
-    LICENCE_NOT_CONFIRMED = "licence_not_confirmed"
     MEDIA_REJECTED = "media_rejected"
     PROCESSING_FAILED = "processing_failed"
     INTERNAL_ERROR = "internal_error"

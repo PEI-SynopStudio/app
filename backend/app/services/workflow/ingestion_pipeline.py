@@ -23,7 +23,6 @@ from app.core.config import (
     SourceType,
     get_settings,
 )
-from app.services.projects.projects import LicenceNotConfirmedError, get_project, require_ingestion_allowed
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     check_audio_not_silent,
@@ -67,7 +66,7 @@ def run_ingestion(
 
     Business-rule rejections and processing errors are stored as a failed status and returned.
     Unexpected errors are stored as well, then re-raised so the worker logs them.
-    Raises ProjectNotFoundError (nothing is written) when the project does not exist.
+    The project and its licence (FR01) are checked before the job exists: workers have no database access.
     """
     project_id = job.project_id
 
@@ -79,14 +78,8 @@ def run_ingestion(
         _notify(on_progress, status)
         return status
 
-    get_project(storage, project_id)
     # A new run replaces the previous one: its old metadata must not be shown next to the new status.
     clear_technical_metadata(storage, project_id)
-
-    try:
-        require_ingestion_allowed(storage, project_id)
-    except LicenceNotConfirmedError as exc:
-        return fail(IngestionErrorCode.LICENCE_NOT_CONFIRMED, str(exc))
 
     try:
         source_path = _fetch_source(storage, job, advance)
