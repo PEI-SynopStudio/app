@@ -25,7 +25,7 @@ class _StrictModel(BaseModel):
 
 
 # =====================================================================
-# 1. PARÂMETROS POR TIPO DE JOB 
+# 1. PARÂMETROS POR TIPO DE JOB.
 # =====================================================================
 
 class IngestionParams(_StrictModel):
