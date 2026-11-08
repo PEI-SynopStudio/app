@@ -82,6 +82,7 @@ DOWNLOAD_FILE = "original.mp4"
 AUDIO_FILE = "audio.wav"
 PROXY_FILE = "proxy.mp4"
 WAVEFORM_FILE = "waveform.json"
+KEYFRAMES_FILE = "keyframes.json"
 ERROR_INVALID_STAGED_FILE = "Invalid staged file name: {name!r}"
 ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED = (
     "Time ranges are not supported for uploaded files yet; upload the full recording."
@@ -226,13 +227,17 @@ PROXY_CONTAINER = "mp4"
 PROXY_MUXER_OPTIONS = {"movflags": "+faststart"}
 PROXY_VIDEO_CODEC = "libx264"
 PROXY_PIXEL_FORMAT = "yuv420p"
-PROXY_VIDEO_OPTIONS = {"preset": "veryfast", "crf": "26"}
+# sc_threshold 0: no extra keyframes at scene changes, so the spacing stays regular.
+PROXY_VIDEO_OPTIONS = {"preset": "veryfast", "crf": "26", "sc_threshold": "0"}
+PROXY_KEYFRAME_INTERVAL_SECONDS = 2.0
+KEYFRAME_TIME_DECIMALS = 3
 PROXY_AUDIO_CODEC = "aac"
 PROXY_AUDIO_BITRATE = 128_000
 PROXY_AUDIO_SAMPLE_FORMAT = "fltp"
 PROXY_AUDIO_FRAME_SIZE = 1024
 ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
 ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
+ERROR_KEYFRAME_INDEX_FAILED = "Failed to build the keyframe index: {details}"
 
 
 # --- Asynchronous jobs (T3.13) ---
@@ -463,6 +468,7 @@ ASSET_METADATA_FIELDS = (
     "channels",
     "source_key",
     "proxy_key",
+    "keyframes_key",
 )
 LOG_JOB_EVENT_REJECTED = "Event rejected for job %s: %s"
 

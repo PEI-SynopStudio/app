@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Deque, Iterator, List, Optional, Tuple
 
 import av
+from av.video.frame import PictureType
 from pydantic import BaseModel
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, download_range_func
@@ -28,6 +29,7 @@ from app.core.config import (
     ERROR_CORRUPTED_PACKETS,
     ERROR_DOWNLOAD_FAILED,
     ERROR_FILE_NOT_FOUND,
+    ERROR_KEYFRAME_INDEX_FAILED,
     ERROR_NO_AUDIO_STREAM,
     ERROR_NO_VIDEO_STREAM,
     ERROR_PROXY_FAILED,
@@ -38,6 +40,7 @@ from app.core.config import (
     ERROR_UNSUPPORTED_CONTAINER,
     ERROR_UNSUPPORTED_VIDEO_CODEC,
     EVEN_DIMENSION,
+    KEYFRAME_TIME_DECIMALS,
     LIST_SEPARATOR,
     MEDIA_WRITE_MODE,
     PCM_FULL_SCALE,
@@ -47,6 +50,7 @@ from app.core.config import (
     PROXY_AUDIO_FRAME_SIZE,
     PROXY_AUDIO_SAMPLE_FORMAT,
     PROXY_CONTAINER,
+    PROXY_KEYFRAME_INTERVAL_SECONDS,
     PROXY_MAX_HEIGHT,
     PROXY_MUXER_OPTIONS,
     PROXY_PIXEL_FORMAT,
@@ -95,6 +99,10 @@ class Waveform(BaseModel):
     window_seconds: float
     peaks: List[float]
     rms: List[float]
+
+
+class KeyframeIndex(BaseModel):
+    times_seconds: List[float]
 
 
 class MediaInfo(BaseModel):
@@ -349,7 +357,7 @@ def _read_pcm_windows(wav_path: Path, window_seconds: float) -> Iterator[array]:
             yield samples
 
 
-# Generate a lightweight H.264/AAC proxy (max 720p, +faststart) with PyAV for web playback and scrubbing.
+# Generate a lightweight H.264/AAC proxy (max 720p, +faststart, regular keyframes) for web playback and scrubbing.
 # Source: MS2 FR02 – Step 5 (Visual Proxy); +faststart from the professor's `find_me.py`.
 def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
     """Generate a lightweight proxy video (H.264, max 720p, AAC, +faststart) for timeline scrubbing and web preview."""
@@ -386,6 +394,7 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                     )
                     input_streams.append(audio_in)
 
+                next_keyframe_time = VIDEO_START_SECONDS
                 # Without presentation times, frames come out in display order but with shuffled timestamps,
                 # so each frame takes the next decode time instead.
                 decode_times: Optional[Deque[int]] = None
@@ -401,6 +410,12 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                             if decode_times is not None:
                                 frame.pts = decode_times.popleft()
                             scaled = frame.reformat(width=width, height=height, format=PROXY_PIXEL_FORMAT)
+                            # Counted in time, not frames, so it also holds at a variable frame rate. Clearing the
+                            # type matters: a frame that needs no scaling still carries the type it had in the source.
+                            scaled.pict_type = PictureType.NONE
+                            if scaled.time is not None and scaled.time >= next_keyframe_time:
+                                scaled.pict_type = PictureType.I
+                                next_keyframe_time = scaled.time + PROXY_KEYFRAME_INTERVAL_SECONDS
                             target.mux(video_out.encode(scaled))
                         else:
                             # AVI can use one tick per packet, too coarse for the shorter chunks of the resampler.
@@ -420,6 +435,28 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
         raise RuntimeError(ERROR_PROXY_FAILED.format(details=exc)) from exc
 
     return output_proxy_path
+
+
+# List the keyframe times of the proxy, read from its packets without decoding, and save them as JSON.
+# Source: MS2 FR02 – Step 5 (keyframe index).
+def generate_keyframe_index(proxy_path: Path, output_json_path: Path) -> Path:
+    """Write `times_seconds`, the sorted presentation time of each keyframe of the proxy."""
+    if not proxy_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=proxy_path))
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with av.open(str(proxy_path)) as container:
+            times = sorted(
+                round(float(packet.pts * packet.time_base), KEYFRAME_TIME_DECIMALS)
+                for packet in container.demux(container.streams.video[0])
+                if packet.size and packet.is_keyframe and packet.pts is not None
+            )
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_KEYFRAME_INDEX_FAILED.format(details=exc)) from exc
+
+    output_json_path.write_text(KeyframeIndex(times_seconds=times).model_dump_json())
+    return output_json_path
 
 
 def _proxy_size(width: int, height: int) -> Tuple[int, int]:

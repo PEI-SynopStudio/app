@@ -13,6 +13,7 @@ from app.services.video.ingestion import (
     check_packet_integrity,
     check_supported_formats,
     extract_normalized_audio,
+    generate_keyframe_index,
     generate_proxy_video,
     generate_waveform,
     inspect_media,
@@ -188,6 +189,42 @@ def test_generate_proxy_video_does_not_upscale(make_sample, tmp_path):
 
     video = inspect_media(proxy_path).streams_of("video")[0]
     assert (video.width, video.height) == (320, 240)
+
+
+def keyframe_times(proxy_path, tmp_path):
+    index_path = generate_keyframe_index(proxy_path, tmp_path / "analysis" / "keyframes.json")
+    return json.loads(index_path.read_text())["times_seconds"]
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_proxy_has_a_keyframe_every_two_seconds(make_sample, tmp_path, extension, video_codec, audio_codec):
+    source = make_sample(extension, video_codec, audio_codec, seconds=8)
+
+    times = keyframe_times(generate_proxy_video(source, tmp_path / "proxy.mp4"), tmp_path)
+
+    assert times == pytest.approx([0, 2, 4, 6], abs=0.05)
+
+
+def test_proxy_keyframes_stay_regular_at_a_variable_frame_rate(make_sample, tmp_path):
+    frame_times = [index * 40 + index % 3 * 15 for index in range(200)]
+
+    source = make_sample(seconds=8, frame_times_ms=frame_times)
+
+    times = keyframe_times(generate_proxy_video(source, tmp_path / "proxy.mp4"), tmp_path)
+
+    assert len(times) >= 4
+    assert all(2 <= later - earlier <= 2.1 for earlier, later in zip(times, times[1:]))
+
+
+def test_proxy_keyframes_are_regular_when_the_video_is_scaled(make_sample, tmp_path):
+    source = make_sample(width=1280, height=960, seconds=4)
+
+    assert keyframe_times(generate_proxy_video(source, tmp_path / "proxy.mp4"), tmp_path) == pytest.approx([0, 2], abs=0.05)
+
+
+def test_generate_keyframe_index_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        generate_keyframe_index(tmp_path / "missing.mp4", tmp_path / "keyframes.json")
 
 
 def test_generate_proxy_video_is_faststart(make_sample, tmp_path):

@@ -13,6 +13,7 @@ from app.core.config import (
     ERROR_INVALID_STAGED_FILE,
     ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED,
     JSON_DUMP_MODE,
+    KEYFRAMES_FILE,
     LOG_INGESTION_FAILED,
     PROGRESS_MAX,
     PROGRESS_MIN,
@@ -35,6 +36,7 @@ from app.services.video.ingestion import (
     check_supported_formats,
     download_youtube_video,
     extract_normalized_audio,
+    generate_keyframe_index,
     generate_proxy_video,
     generate_waveform,
     inspect_media,
@@ -94,7 +96,8 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         generate_waveform(audio_path, storage.path(project_id, ANALYSIS_DIR, WAVEFORM_FILE))
 
         advance(JobStepProcessingEnum.GENERATING_PROXY)
-        generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
+        proxy_path = generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
+        generate_keyframe_index(proxy_path, storage.path(project_id, ANALYSIS_DIR, KEYFRAMES_FILE))
 
         advance(JobStepProcessingEnum.PERSISTING_RESULTS)
         output = _build_output(storage, request, media, scan.is_vfr, source_path)
@@ -159,4 +162,5 @@ def _build_output(
         proxy_key=PurePosixPath(PROXY_DIR, PROXY_FILE).as_posix(),
         audio_key=PurePosixPath(AUDIO_DIR, AUDIO_FILE).as_posix(),
         waveform_key=PurePosixPath(ANALYSIS_DIR, WAVEFORM_FILE).as_posix(),
+        keyframes_key=PurePosixPath(ANALYSIS_DIR, KEYFRAMES_FILE).as_posix(),
     )
