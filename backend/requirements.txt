@@ -1,11 +1,8 @@
 fastapi
 uvicorn[standard]
 pydantic
-httpx
-pytest
 alembic
 sqlalchemy
-asyncpg 
 psycopg2-binary
 python-multipart>=0.0.12
 yt-dlp>=2024.10.07

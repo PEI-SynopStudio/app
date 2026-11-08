@@ -18,8 +18,11 @@ DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024**3
 DEFAULT_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024**2
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
-WHISPER_MODEL= "openai/whisper-large-v3-turbo"
-DEFAULT_LANGUAGE= "pt"
+DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
+DEFAULT_LANGUAGE = "pt"
+DEFAULT_DATABASE_URL = "postgresql://pei:pei@postgres:5432/pei"
+DEFAULT_DATABASE_ECHO = "false"
+ENV_TRUE_VALUE = "true"
 
 
 # --- Storage layout ---
@@ -259,6 +262,7 @@ class Settings:
     whisper_model: str
     default_language: str
     database_url: str
+    database_echo: bool
 
 
 @lru_cache
@@ -275,7 +279,8 @@ def get_settings() -> Settings:
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
         upload_chunk_size_bytes=int(os.environ.get("UPLOAD_CHUNK_SIZE_BYTES", DEFAULT_UPLOAD_CHUNK_SIZE_BYTES)),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
-        whisper_model=os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo"),
-        default_language=os.environ.get("DEFAULT_LANGUAGE", "pt"),
-        database_url=os.environ.get("DATABASE_URL", "postgresql://pei:pei@postgres:5432/pei")
+        whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
+        database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
+        database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
     )
