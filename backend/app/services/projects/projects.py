@@ -2,9 +2,18 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.core.config import ERROR_INVALID_PROJECT_ID, ERROR_LICENCE_NOT_CONFIRMED, ERROR_PROJECT_NOT_FOUND
+from app.core.config import (
+    AUDIT_LICENCE_FIELDS,
+    AUDIT_PROJECT_FIELDS,
+    ERROR_INVALID_PROJECT_ID,
+    ERROR_LICENCE_NOT_CONFIRMED,
+    ERROR_PROJECT_NOT_FOUND,
+    JSON_DUMP_MODE,
+    AuditAction,
+)
 from app.database.models import Project
 from app.schemas.project import ProjectCreate
+from app.services.audit.audit import record_audit
 
 
 class ProjectNotFoundError(LookupError):
@@ -15,11 +24,22 @@ class LicenceNotConfirmedError(PermissionError):
     pass
 
 
-# Register a project with its authorship and licensing metadata.
-# Source: MS2 FR01 – Inputs and Output (persisted project record with compliance metadata).
+# Register a project with its authorship and licensing metadata, and record it in the audit log.
+# Source: MS2 FR01 – Inputs and Output (persisted project record with compliance metadata); FR18.
 def create_project(db: Session, data: ProjectCreate) -> Project:
     project = Project(**data.model_dump())
     db.add(project)
+    db.flush()  # assigns the ID the audit entries refer to
+    record_audit(
+        db, project.id, AuditAction.PROJECT_CREATED, data.model_dump(mode=JSON_DUMP_MODE, include=AUDIT_PROJECT_FIELDS)
+    )
+    if project.licence_confirmed and project.authorship_confirmed:
+        record_audit(
+            db,
+            project.id,
+            AuditAction.LICENCE_CONFIRMED,
+            data.model_dump(mode=JSON_DUMP_MODE, include=AUDIT_LICENCE_FIELDS),
+        )
     db.commit()
     return project
 

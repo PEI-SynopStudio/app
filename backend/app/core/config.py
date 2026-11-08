@@ -431,6 +431,11 @@ class AuditAction(str, Enum):
     PROJECT_DELETED = "project.deleted"
 
 
+# Project fields copied to the audit log, which outlives the project (MS3 §1.4.3).
+AUDIT_PROJECT_FIELDS = {"title"}
+AUDIT_LICENCE_FIELDS = {"author", "license_type", "copyright_notice", "licence_confirmed", "authorship_confirmed"}
+
+
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())
