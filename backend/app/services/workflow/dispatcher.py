@@ -28,6 +28,7 @@ from app.database.session import get_session_factory
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.workflow.ingestion_pipeline import IngestionJob, ProgressCallback, run_ingestion
+from app.services.workflow.jobs import IngestionAlreadyRunningError
 from app.services.workflow.status import IngestionStatus, set_stage
 
 logger = logging.getLogger(__name__)
@@ -45,10 +46,6 @@ class MediaIngestedEvent(BaseModel):
 
 
 EventPublisher = Callable[[MediaIngestedEvent], None]
-
-
-class IngestionAlreadyRunningError(Exception):
-    pass
 
 
 def log_event(event: MediaIngestedEvent) -> None:

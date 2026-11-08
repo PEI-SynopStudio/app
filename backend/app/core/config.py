@@ -436,6 +436,9 @@ AUDIT_PROJECT_FIELDS = {"title"}
 AUDIT_LICENCE_FIELDS = {"author", "license_type", "copyright_notice", "licence_confirmed", "authorship_confirmed"}
 AUDIT_DETAIL_FILE_NAME = "file_name"
 AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
+AUDIT_DETAIL_JOB_ID = "job_id"
+AUDIT_DETAIL_SOURCE = "source"
+LOG_JOB_EVENT_REJECTED = "Event rejected for job %s: %s"
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
