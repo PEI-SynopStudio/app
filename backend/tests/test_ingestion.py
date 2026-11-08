@@ -1,3 +1,4 @@
+import json
 import math
 import wave
 from array import array
@@ -13,6 +14,7 @@ from app.services.video.ingestion import (
     check_supported_formats,
     extract_normalized_audio,
     generate_proxy_video,
+    generate_waveform,
     inspect_media,
     scan_packets,
 )
@@ -248,6 +250,42 @@ def test_check_audio_not_silent_rejects_silent_recording(make_sample, tmp_path):
 @pytest.mark.parametrize("amplitude", [0.5, 0.01])  # about -9 dBFS and -43 dBFS RMS
 def test_check_audio_not_silent_accepts_audible_tone(tmp_path, amplitude):
     check_audio_not_silent(write_tone(tmp_path / "tone.wav", amplitude, silent_seconds=5))
+
+
+def read_waveform(path):
+    return json.loads(path.read_text())
+
+
+def test_generate_waveform_measures_each_window(tmp_path):
+    wav_path = write_tone(tmp_path / "tone.wav", 0.5, seconds=2, silent_seconds=1)
+
+    waveform = read_waveform(generate_waveform(wav_path, tmp_path / "analysis" / "waveform.json"))
+
+    assert waveform["window_seconds"] == 0.1
+    assert len(waveform["peaks"]) == len(waveform["rms"]) == 30
+    assert set(waveform["peaks"][:10]) == set(waveform["rms"][:10]) == {0}
+    assert waveform["peaks"][20] == pytest.approx(0.5, abs=0.01)
+    assert waveform["rms"][20] == pytest.approx(0.5 / math.sqrt(2), abs=0.01)
+
+
+def test_generate_waveform_keeps_a_shorter_last_window(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.video.ingestion.WAVEFORM_WINDOW_SECONDS", 0.3)
+    wav_path = write_tone(tmp_path / "tone.wav", 0.5, seconds=1)
+
+    waveform = read_waveform(generate_waveform(wav_path, tmp_path / "waveform.json"))
+
+    assert len(waveform["rms"]) == 4
+    assert waveform["rms"][-1] == pytest.approx(0.5 / math.sqrt(2), abs=0.01)
+
+
+def test_generate_waveform_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        generate_waveform(tmp_path / "missing.wav", tmp_path / "waveform.json")
+
+
+def test_check_audio_not_silent_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        check_audio_not_silent(tmp_path / "missing.wav")
 
 
 def test_check_audio_not_silent_rejects_very_quiet_tone(tmp_path):

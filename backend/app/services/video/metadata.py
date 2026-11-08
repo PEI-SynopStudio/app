@@ -34,6 +34,7 @@ class IngestionOutput(TechnicalMetadata):
     source_key: str
     proxy_key: str
     audio_key: str
+    waveform_key: str
 
 
 # Collect the technical metadata of the original source from its inspection result.

@@ -6,7 +6,7 @@ from array import array
 from collections import deque
 from fractions import Fraction
 from pathlib import Path
-from typing import Deque, List, Optional, Tuple
+from typing import Deque, Iterator, List, Optional, Tuple
 
 import av
 from pydantic import BaseModel
@@ -64,6 +64,8 @@ from app.core.config import (
     VIDEO_START_SECONDS,
     WAV_BYTE_ORDER,
     WAV_READ_MODE,
+    WAVEFORM_DECIMALS,
+    WAVEFORM_WINDOW_SECONDS,
     YTDLP_FORMAT_SORT,
     YTDLP_FORMAT_TEMPLATE,
     YTDLP_MAX_HEIGHT,
@@ -87,6 +89,12 @@ class StreamInfo(BaseModel):
     frame_rate: Optional[float] = None
     sample_rate: Optional[int] = None
     channels: Optional[int] = None
+
+
+class Waveform(BaseModel):
+    window_seconds: float
+    peaks: List[float]
+    rms: List[float]
 
 
 class MediaInfo(BaseModel):
@@ -299,23 +307,46 @@ def check_audio_not_silent(wav_path: Path) -> None:
 
     Stops at the first loud window, so normal recordings are not read to the end.
     """
+    # Compare sums of squares with the threshold converted to linear RMS (no sqrt/log per window).
+    threshold_rms = PCM_FULL_SCALE * DECIBEL_BASE ** (SILENCE_THRESHOLD_DBFS / DECIBEL_FACTOR)
+    for samples in _read_pcm_windows(wav_path, SILENCE_WINDOW_SECONDS):
+        if math.fsum(sample * sample for sample in samples) > threshold_rms**2 * len(samples):
+            return
+
+    raise MediaRejectedError(JobErrorCodeEnum.SILENT_AUDIO, ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
+
+
+# Measure the peak and the RMS level of each short window of the normalized audio and save them as JSON.
+# Source: MS2 FR02 – Step 4 (waveform and volume profile).
+def generate_waveform(wav_path: Path, output_json_path: Path) -> Path:
+    """Write `peaks` (waveform) and `rms` (volume profile), both from 0 to 1 of full scale, one value per window."""
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    peaks, rms = [], []
+    for samples in _read_pcm_windows(wav_path, WAVEFORM_WINDOW_SECONDS):
+        peaks.append(round(max(max(samples), -min(samples)) / PCM_FULL_SCALE, WAVEFORM_DECIMALS))
+        energy = math.fsum(sample * sample for sample in samples) / len(samples)
+        rms.append(round(math.sqrt(energy) / PCM_FULL_SCALE, WAVEFORM_DECIMALS))
+
+    waveform = Waveform(window_seconds=WAVEFORM_WINDOW_SECONDS, peaks=peaks, rms=rms)
+    output_json_path.write_text(waveform.model_dump_json())
+    return output_json_path
+
+
+def _read_pcm_windows(wav_path: Path, window_seconds: float) -> Iterator[array]:
+    """Yield the samples of a 16-bit PCM WAV in consecutive windows, without loading the whole track."""
     if not wav_path.exists():
         raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=wav_path))
 
-    # Compare sums of squares with the threshold converted to linear RMS (no sqrt/log per window).
-    threshold_rms = PCM_FULL_SCALE * DECIBEL_BASE ** (SILENCE_THRESHOLD_DBFS / DECIBEL_FACTOR)
     with wave.open(str(wav_path), WAV_READ_MODE) as wav:
-        window_frames = wav.getframerate() * SILENCE_WINDOW_SECONDS
+        window_frames = round(wav.getframerate() * window_seconds)
         while True:
             samples = array(PCM_SAMPLE_TYPECODE, wav.readframes(window_frames))
             if not samples:
-                break
+                return
             if sys.byteorder != WAV_BYTE_ORDER:
                 samples.byteswap()
-            if math.fsum(sample * sample for sample in samples) > threshold_rms**2 * len(samples):
-                return
-
-    raise MediaRejectedError(JobErrorCodeEnum.SILENT_AUDIO, ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
+            yield samples
 
 
 # Generate a lightweight H.264/AAC proxy (max 720p, +faststart) with PyAV for web playback and scrubbing.

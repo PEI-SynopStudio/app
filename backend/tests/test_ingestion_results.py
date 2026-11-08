@@ -40,6 +40,7 @@ OUTPUT = {
     "source_key": "source/original.mp4",
     "proxy_key": "proxy/proxy.mp4",
     "audio_key": "audio/audio.wav",
+    "waveform_key": "analysis/waveform.json",
 }
 
 
@@ -109,6 +110,7 @@ def test_a_completed_job_saves_the_technical_metadata(db):
     assert (track.sample_rate, track.channels, track.format, track.storage_key) == (
         16000, 1, "wav", "audio/audio.wav"
     )
+    assert track.waveform_key == "analysis/waveform.json"
     assert db.get(Project, project.id).status == ProjectStatus.INGESTED
     assert audit_details(db, project, AuditAction.INGESTION_COMPLETED) == {"job_id": str(job.id)}
 

@@ -8,7 +8,7 @@ from app.core.config import ERROR_INVALID_PROJECT_ID, PROJECTS_DIR, get_settings
 class LocalStorage:
     """Per-project file storage on the local media volume.
 
-    Layout: <root>/projects/<project_id>/{source,audio,proxy,uploads}/. Kept small so it can be
+    Layout: <root>/projects/<project_id>/{source,audio,proxy,analysis,uploads}/. Kept small so it can be
     swapped for an S3-compatible backend (SeaweedFS) later.
     """
 

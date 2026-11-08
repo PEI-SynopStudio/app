@@ -1,3 +1,4 @@
+import json
 import shutil
 import uuid
 
@@ -76,6 +77,9 @@ def test_upload_is_ingested(storage, project_id, make_sample):
     assert (final.output["source_key"], final.output["proxy_key"], final.output["audio_key"]) == (
         "source/lecture.mp4", "proxy/proxy.mp4", "audio/audio.wav"
     )
+    assert final.output["waveform_key"] == "analysis/waveform.json"
+    waveform = json.loads(storage.path(project_id, "analysis", "waveform.json").read_text())
+    assert len(waveform["peaks"]) == len(waveform["rms"]) == pytest.approx(20, abs=1)
 
 
 def test_every_event_identifies_the_job_and_attempt(storage, project_id, make_sample):
@@ -92,6 +96,7 @@ def test_silent_upload_fails_before_proxy(storage, project_id, make_sample):
     assert_failed(final, JobErrorCodeEnum.SILENT_AUDIO)
     assert "silent" in final.error_message
     assert steps(events)[-1] == JobStepProcessingEnum.EXTRACTING_AUDIO
+    assert not storage.path(project_id, "analysis", "waveform.json").exists()
     assert not storage.path(project_id, "proxy", "proxy.mp4").exists()
 
 

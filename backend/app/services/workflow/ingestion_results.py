@@ -49,6 +49,7 @@ def _record_success(db: Session, job: Job, project: Project, asset: Optional[Med
             channels=AUDIO_CHANNELS,
             format=AUDIO_CONTAINER,
             storage_key=output.audio_key,
+            waveform_key=output.waveform_key,
         ))
     project.status = ProjectStatus.INGESTED
     record_audit(db, project.id, AuditAction.INGESTION_COMPLETED, {AUDIT_DETAIL_JOB_ID: str(job.id)})

@@ -77,9 +77,11 @@ CONTENT_TYPE_MAX_LENGTH = 100
 SOURCE_DIR = "source"
 AUDIO_DIR = "audio"
 PROXY_DIR = "proxy"
+ANALYSIS_DIR = "analysis"
 DOWNLOAD_FILE = "original.mp4"
 AUDIO_FILE = "audio.wav"
 PROXY_FILE = "proxy.mp4"
+WAVEFORM_FILE = "waveform.json"
 ERROR_INVALID_STAGED_FILE = "Invalid staged file name: {name!r}"
 ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED = (
     "Time ranges are not supported for uploaded files yet; upload the full recording."
@@ -202,6 +204,10 @@ WAV_BYTE_ORDER = "little"
 ERROR_SILENT_AUDIO = (
     "Video rejected: the audio track is silent (no window louder than {threshold} dBFS)."
 )
+
+# --- Waveform and volume profile on the normalized WAV (FR02 step 4) ---
+WAVEFORM_WINDOW_SECONDS = 0.1
+WAVEFORM_DECIMALS = 4
 
 # --- Technical metadata (FR02 step 6) ---
 ASPECT_RATIO_FORMAT = "{numerator}:{denominator}"

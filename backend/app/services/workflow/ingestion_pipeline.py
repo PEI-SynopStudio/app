@@ -3,6 +3,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from app.core.config import (
+    ANALYSIS_DIR,
     AUDIO_DIR,
     AUDIO_FILE,
     DOWNLOAD_FILE,
@@ -18,6 +19,7 @@ from app.core.config import (
     PROXY_DIR,
     PROXY_FILE,
     SOURCE_DIR,
+    WAVEFORM_FILE,
     JobErrorCodeEnum,
     JobStatusEnum,
     JobStepProcessingEnum,
@@ -34,6 +36,7 @@ from app.services.video.ingestion import (
     download_youtube_video,
     extract_normalized_audio,
     generate_proxy_video,
+    generate_waveform,
     inspect_media,
     scan_packets,
 )
@@ -88,6 +91,7 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
         audio_path = extract_normalized_audio(source_path, storage.path(project_id, AUDIO_DIR, AUDIO_FILE))
         check_audio_not_silent(audio_path)
+        generate_waveform(audio_path, storage.path(project_id, ANALYSIS_DIR, WAVEFORM_FILE))
 
         advance(JobStepProcessingEnum.GENERATING_PROXY)
         generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
@@ -154,4 +158,5 @@ def _build_output(
         source_key=source_path.relative_to(storage.project_dir(str(request.project_id))).as_posix(),
         proxy_key=PurePosixPath(PROXY_DIR, PROXY_FILE).as_posix(),
         audio_key=PurePosixPath(AUDIO_DIR, AUDIO_FILE).as_posix(),
+        waveform_key=PurePosixPath(ANALYSIS_DIR, WAVEFORM_FILE).as_posix(),
     )
