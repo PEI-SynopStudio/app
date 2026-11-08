@@ -411,6 +411,24 @@ STORAGE_KEY_MAX_LENGTH = 1024
 CONTAINER_NAME_MAX_LENGTH = 128
 CODEC_NAME_MAX_LENGTH = 64
 ASPECT_RATIO_MAX_LENGTH = 32
+TABLE_UPLOAD_SESSIONS = "upload_sessions"
+TABLE_JOBS = "jobs"
+TABLE_AUDIT_LOG = "audit_log"
+DB_ON_DELETE_SET_NULL = "SET NULL"
+JOB_ACTIVE_STATUSES = (JobStatusEnum.PENDING, JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING)
+JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
+ACTOR_HASH_MAX_LENGTH = 64
+ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
+
+
+class AuditAction(str, Enum):
+    PROJECT_CREATED = "project.created"
+    LICENCE_CONFIRMED = "licence.confirmed"
+    UPLOAD_STARTED = "upload.started"
+    INGESTION_REQUESTED = "ingestion.requested"
+    INGESTION_COMPLETED = "ingestion.completed"
+    INGESTION_FAILED = "ingestion.failed"
+    PROJECT_DELETED = "project.deleted"
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
