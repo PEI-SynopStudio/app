@@ -4,13 +4,17 @@ from array import array
 
 import pytest
 
-from app.core.config import AUDIO_CODEC, AUDIO_SAMPLE_RATE, PROXY_MAX_HEIGHT
+from app.core.config import AUDIO_CODEC, AUDIO_SAMPLE_RATE, PROXY_MAX_HEIGHT, JobErrorCodeEnum
+from app.core.exceptions import MediaRejectedError
 from app.services.video.ingestion import (
+    PacketScan,
     check_audio_not_silent,
+    check_packet_integrity,
     check_supported_formats,
     extract_normalized_audio,
     generate_proxy_video,
     inspect_media,
+    scan_packets,
 )
 
 # Containers and codecs accepted by FR02 for direct upload.
@@ -21,7 +25,6 @@ CONTAINERS = [
     ("webm", "libvpx-vp9", "libopus"),
     ("avi", "h264", "mp3"),
 ]
-
 
 @pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
 def test_inspect_media_reads_supported_containers(make_sample, extension, video_codec, audio_codec):
@@ -67,6 +70,104 @@ def test_inspect_media_rejects_unreadable_file(tmp_path):
 
     with pytest.raises(RuntimeError, match="unreadable"):
         inspect_media(corrupted)
+
+
+def truncate(path, share=0.5):
+    """Keep only the first part of a file, as an interrupted copy would."""
+    path.write_bytes(path.read_bytes()[: int(path.stat().st_size * share)])
+    return path
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_scan_packets_accepts_a_healthy_file(make_sample, extension, video_codec, audio_codec):
+    scan = scan_packets(make_sample(extension, video_codec, audio_codec))
+
+    assert (scan.is_vfr, scan.corrupted_packets) == (False, 0)
+    check_packet_integrity(scan)
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_scan_packets_detects_a_variable_frame_rate(make_sample, vfr_frame_times, extension, video_codec, audio_codec):
+    scan = scan_packets(make_sample(extension, video_codec, audio_codec, frame_times_ms=vfr_frame_times))
+
+    assert scan.is_vfr is True
+    check_packet_integrity(scan)
+
+
+def test_scan_packets_tolerates_a_dropped_frame(make_sample):
+    times = [index * 40 for index in range(200) if index != 100]
+
+    assert scan_packets(make_sample(seconds=8, frame_times_ms=times)).is_vfr is False
+
+
+def test_scan_packets_tolerates_timestamp_rounding(make_sample):
+    """29.97 fps in a millisecond time base alternates between 33 and 34 ms."""
+    times = [round(index * 1001 / 30) for index in range(60)]
+
+    assert scan_packets(make_sample("mkv", frame_times_ms=times)).is_vfr is False
+
+
+def test_scan_packets_tolerates_rounding_carried_over_by_a_remux(make_sample, tmp_path):
+    """60 fps rounded to milliseconds keeps its 16 and 17 ms intervals in the finer time base of an MP4."""
+    times = [round(index * 1000 / 60) for index in range(120)]
+
+    proxy_path = generate_proxy_video(make_sample("mkv", frame_times_ms=times), tmp_path / "proxy.mp4")
+
+    assert scan_packets(proxy_path).is_vfr is False
+
+
+def test_scan_packets_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        scan_packets(tmp_path / "missing.mp4")
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", [("mkv", "h264", "aac"), ("webm", "libvpx-vp9", "libopus")])
+def test_truncated_file_is_rejected(make_sample, extension, video_codec, audio_codec):
+    scan = scan_packets(truncate(make_sample(extension, video_codec, audio_codec, seconds=8)))
+
+    with pytest.raises(MediaRejectedError, match="incomplete") as error:
+        check_packet_integrity(scan)
+    assert error.value.code == JobErrorCodeEnum.CORRUPTED_MEDIA
+
+
+def test_truncated_faststart_mp4_is_rejected(make_sample, tmp_path):
+    """+faststart keeps the index at the start of the file, so a truncated copy still opens."""
+    proxy = generate_proxy_video(make_sample(seconds=8), tmp_path / "proxy.mp4")
+
+    with pytest.raises(MediaRejectedError):
+        check_packet_integrity(scan_packets(truncate(proxy)))
+
+
+def test_corrupted_packets_are_rejected():
+    with pytest.raises(MediaRejectedError, match="2 corrupted packet") as error:
+        check_packet_integrity(PacketScan(is_vfr=False, corrupted_packets=2))
+    assert error.value.code == JobErrorCodeEnum.CORRUPTED_MEDIA
+
+
+def test_unknown_duration_is_not_treated_as_truncated():
+    check_packet_integrity(PacketScan(is_vfr=False, corrupted_packets=0, missing_seconds=None))
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_generate_proxy_video_keeps_constant_timing(make_sample, tmp_path, extension, video_codec, audio_codec):
+    source = make_sample(extension, video_codec, audio_codec)
+
+    proxy_path = generate_proxy_video(source, tmp_path / "proxy.mp4")
+
+    assert scan_packets(proxy_path).is_vfr is False
+    assert inspect_media(proxy_path).duration_seconds == pytest.approx(inspect_media(source).duration_seconds, abs=0.2)
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_generate_proxy_video_keeps_variable_timing(
+    make_sample, vfr_frame_times, tmp_path, extension, video_codec, audio_codec
+):
+    source = make_sample(extension, video_codec, audio_codec, frame_times_ms=vfr_frame_times)
+
+    proxy_path = generate_proxy_video(source, tmp_path / "proxy.mp4")
+
+    assert scan_packets(proxy_path).is_vfr is True
+    assert inspect_media(proxy_path).duration_seconds == pytest.approx(inspect_media(source).duration_seconds, abs=0.2)
 
 
 def test_generate_proxy_video_downscales_to_720p(make_sample, tmp_path):

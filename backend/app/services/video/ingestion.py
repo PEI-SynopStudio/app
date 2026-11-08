@@ -1,10 +1,12 @@
+import heapq
 import math
 import sys
 import wave
 from array import array
+from collections import deque
 from fractions import Fraction
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 import av
 from pydantic import BaseModel
@@ -19,15 +21,18 @@ from app.core.config import (
     AUDIO_LAYOUT,
     AUDIO_SAMPLE_FORMAT,
     AUDIO_SAMPLE_RATE,
+    CONTAINERS_WITHOUT_PRESENTATION_TIMES,
     DECIBEL_BASE,
     DECIBEL_FACTOR,
     ERROR_AUDIO_EXTRACTION_FAILED,
+    ERROR_CORRUPTED_PACKETS,
     ERROR_DOWNLOAD_FAILED,
     ERROR_FILE_NOT_FOUND,
     ERROR_NO_AUDIO_STREAM,
     ERROR_NO_VIDEO_STREAM,
     ERROR_PROXY_FAILED,
     ERROR_SILENT_AUDIO,
+    ERROR_TRUNCATED_MEDIA,
     ERROR_UNREADABLE_MEDIA,
     ERROR_UNSUPPORTED_AUDIO_CODEC,
     ERROR_UNSUPPORTED_CONTAINER,
@@ -51,6 +56,11 @@ from app.core.config import (
     SILENCE_WINDOW_SECONDS,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
+    TRUNCATION_TOLERANCE_SECONDS,
+    VFR_INTERVAL_TOLERANCE,
+    VFR_MIN_IRREGULAR_SHARE,
+    VFR_REORDER_WINDOW,
+    VFR_TIMESTAMP_ROUNDING_SECONDS,
     VIDEO_START_SECONDS,
     WAV_BYTE_ORDER,
     WAV_READ_MODE,
@@ -135,6 +145,95 @@ def _display_aspect_ratio(width: int, height: int, sample_aspect_ratio: Optional
         return None
     ratio = Fraction(width, height) * (sample_aspect_ratio or 1)
     return ASPECT_RATIO_FORMAT.format(numerator=ratio.numerator, denominator=ratio.denominator)
+
+
+class PacketScan(BaseModel):
+    is_vfr: bool
+    corrupted_packets: int
+    missing_seconds: Optional[float] = None
+
+
+class _FrameIntervals:
+    """Counts changes between consecutive frame intervals, in presentation order and constant memory."""
+
+    def __init__(self, rounding_ticks: float) -> None:
+        self._rounding_ticks = rounding_ticks
+        self._pending: List[int] = []
+        self._last_pts: Optional[int] = None
+        self._last_interval: Optional[int] = None
+        self._compared = 0
+        self._irregular = 0
+
+    def add(self, pts: int) -> None:
+        heapq.heappush(self._pending, pts)
+        if len(self._pending) > VFR_REORDER_WINDOW:
+            self._advance(heapq.heappop(self._pending))
+
+    def is_variable(self) -> bool:
+        while self._pending:
+            self._advance(heapq.heappop(self._pending))
+        return self._irregular > self._compared * VFR_MIN_IRREGULAR_SHARE
+
+    def _advance(self, pts: int) -> None:
+        if self._last_pts is not None:
+            interval = pts - self._last_pts
+            if self._last_interval is not None:
+                self._compared += 1
+                tolerance = max(self._rounding_ticks, min(interval, self._last_interval) * VFR_INTERVAL_TOLERANCE)
+                if abs(interval - self._last_interval) > tolerance:
+                    self._irregular += 1
+            self._last_interval = interval
+        self._last_pts = pts
+
+
+# Read every packet without decoding: frame timing, packets flagged as damaged and where the data really ends.
+# Source: MS2 FR02 – Step 3 (corrupted packets, variable frame rate).
+def scan_packets(input_path: Path) -> PacketScan:
+    """Measure the source in one streaming pass; `missing_seconds` is None when the file declares no duration."""
+    if not input_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=input_path))
+
+    corrupted = 0
+    data_end: Optional[Fraction] = None
+    try:
+        with av.open(str(input_path)) as container:
+            video = container.streams.video[0]
+            intervals = _FrameIntervals(VFR_TIMESTAMP_ROUNDING_SECONDS / float(video.time_base))
+            for packet in container.demux():
+                # Each stream ends with an empty packet that only flushes the decoder.
+                if not packet.size:
+                    continue
+                if packet.is_corrupt:
+                    corrupted += 1
+                if packet.pts is None:
+                    continue
+                if packet.stream.index == video.index:
+                    intervals.add(packet.pts)
+                packet_end = (packet.pts + (packet.duration or 0)) * packet.time_base
+                data_end = packet_end if data_end is None else max(data_end, packet_end)
+
+            missing = None
+            if container.duration and data_end is not None:
+                declared_end = Fraction((container.start_time or 0) + container.duration, av.time_base)
+                missing = float(declared_end - data_end)
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_UNREADABLE_MEDIA.format(details=exc)) from exc
+
+    return PacketScan(is_vfr=intervals.is_variable(), corrupted_packets=corrupted, missing_seconds=missing)
+
+
+# Reject sources with packets flagged as damaged or whose data ends before the declared duration.
+# Source: MS2 FR02 – Step 3 (corrupted packets; unreadable files rejected with details).
+def check_packet_integrity(scan: PacketScan) -> None:
+    """A variable frame rate is only recorded, never rejected."""
+    if scan.corrupted_packets:
+        raise MediaRejectedError(
+            JobErrorCodeEnum.CORRUPTED_MEDIA, ERROR_CORRUPTED_PACKETS.format(count=scan.corrupted_packets)
+        )
+    if scan.missing_seconds is not None and scan.missing_seconds > TRUNCATION_TOLERANCE_SECONDS:
+        raise MediaRejectedError(
+            JobErrorCodeEnum.CORRUPTED_MEDIA, ERROR_TRUNCATED_MEDIA.format(missing=scan.missing_seconds)
+        )
 
 
 # Reject containers and codecs outside the FR02 whitelist (checked on the server, not only in the client).
@@ -239,6 +338,8 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                 video_out = target.add_stream(PROXY_VIDEO_CODEC, rate=video_in.average_rate)
                 video_out.width, video_out.height, video_out.pix_fmt = width, height, PROXY_PIXEL_FORMAT
                 video_out.options = dict(PROXY_VIDEO_OPTIONS)
+                # With the default 1/frame_rate, close frames of a variable-frame-rate source would share a timestamp.
+                video_out.codec_context.time_base = video_in.time_base
 
                 input_streams = [video_in]
                 audio_out = resampler = None
@@ -254,13 +355,27 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                     )
                     input_streams.append(audio_in)
 
+                # Without presentation times, frames come out in display order but with shuffled timestamps,
+                # so each frame takes the next decode time instead.
+                decode_times: Optional[Deque[int]] = None
+                if source.format.name in CONTAINERS_WITHOUT_PRESENTATION_TIMES:
+                    decode_times = deque()
+
                 # Single pass over the source: packets are demuxed in order and routed by stream type.
                 for packet in source.demux(*input_streams):
+                    if decode_times is not None and packet.stream.type == STREAM_TYPE_VIDEO and packet.size:
+                        decode_times.append(packet.dts)
                     for frame in packet.decode():
                         if packet.stream.type == STREAM_TYPE_VIDEO:
+                            if decode_times is not None:
+                                frame.pts = decode_times.popleft()
                             scaled = frame.reformat(width=width, height=height, format=PROXY_PIXEL_FORMAT)
                             target.mux(video_out.encode(scaled))
                         else:
+                            # AVI can use one tick per packet, too coarse for the shorter chunks of the resampler.
+                            if frame.pts is not None:
+                                frame.pts = round(frame.pts * frame.time_base * sample_rate)
+                                frame.time_base = Fraction(1, sample_rate)
                             for chunk in resampler.resample(frame):
                                 target.mux(audio_out.encode(chunk))
 

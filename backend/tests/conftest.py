@@ -3,8 +3,9 @@ import os
 import sys
 from array import array
 from fractions import Fraction
+from itertools import accumulate, cycle, islice
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import av
 import pytest
@@ -47,17 +48,23 @@ def _write_sample(
     height: int,
     seconds: int,
     tone: bool = False,
+    frame_times_ms: Optional[Sequence[int]] = None,
 ) -> Path:
-    """Encode a short synthetic video (blank frames; silent audio, or a 440 Hz tone) with PyAV."""
+    """Encode a short synthetic video (blank frames; silent audio, or a 440 Hz tone) with PyAV.
+
+    Frames come at a constant rate, or at the exact `frame_times_ms` when given.
+    """
     with av.open(str(path), "w") as container:
         # All streams must be added before the first packet is muxed.
         video = container.add_stream(video_codec, rate=SAMPLE_FPS)
         video.width, video.height, video.pix_fmt = width, height, "yuv420p"
         audio = container.add_stream(audio_codec, rate=SAMPLE_RATE, layout=SAMPLE_LAYOUT) if audio_codec else None
 
-        for index in range(seconds * SAMPLE_FPS):
+        time_base = Fraction(1, 1000) if frame_times_ms is not None else Fraction(1, SAMPLE_FPS)
+        video.codec_context.time_base = time_base
+        for pts in frame_times_ms if frame_times_ms is not None else range(seconds * SAMPLE_FPS):
             frame = av.VideoFrame(width, height, "yuv420p")
-            frame.pts, frame.time_base = index, Fraction(1, SAMPLE_FPS)
+            frame.pts, frame.time_base = pts, time_base
             container.mux(video.encode(frame))
         container.mux(video.encode(None))
 
@@ -87,11 +94,18 @@ def make_sample(tmp_path):
         height: int = 240,
         seconds: int = 2,
         tone: bool = False,
+        frame_times_ms: Optional[Sequence[int]] = None,
     ) -> Path:
         path = tmp_path / f"sample_{video_codec}_{audio_codec}.{extension}"
-        return _write_sample(path, video_codec, audio_codec, width, height, seconds, tone)
+        return _write_sample(path, video_codec, audio_codec, width, height, seconds, tone, frame_times_ms)
 
     return factory
+
+
+@pytest.fixture
+def vfr_frame_times():
+    """Frame times in ms of a clip of about 2 s whose intervals keep changing."""
+    return list(accumulate(islice(cycle((20, 40, 40, 66, 100)), 37), initial=0))
 
 
 @pytest.fixture(scope="session")

@@ -125,6 +125,41 @@ def test_corrupted_upload_fails_as_processing_error(storage, project_id, tmp_pat
     assert_failed(final, JobErrorCodeEnum.CORRUPTED_MEDIA)
 
 
+def test_variable_frame_rate_upload_is_ingested_and_flagged(storage, project_id, make_sample, vfr_frame_times):
+    sample = make_sample(tone=True, frame_times_ms=vfr_frame_times)
+
+    final, _ = run(storage, stage_upload(storage, project_id, sample))
+
+    assert final.status == JobStatusEnum.COMPLETED
+    assert final.output["is_vfr"] is True
+
+
+def test_avi_upload_with_reordered_frames_is_ingested(storage, project_id, make_sample):
+    sample = make_sample("avi", "h264", "mp3", tone=True)
+
+    final, _ = run(storage, stage_upload(storage, project_id, sample, "lecture.avi"))
+
+    assert final.status == JobStatusEnum.COMPLETED
+    assert final.output["is_vfr"] is False
+
+
+def test_constant_frame_rate_upload_is_not_flagged(storage, project_id, make_sample):
+    final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
+
+    assert final.output["is_vfr"] is False
+
+
+def test_truncated_upload_fails_before_audio_extraction(storage, project_id, make_sample):
+    sample = make_sample("mkv", tone=True, seconds=8)
+    sample.write_bytes(sample.read_bytes()[: sample.stat().st_size // 2])
+
+    final, events = run(storage, stage_upload(storage, project_id, sample, "lecture.mkv"))
+
+    assert_failed(final, JobErrorCodeEnum.CORRUPTED_MEDIA)
+    assert "incomplete" in final.error_message
+    assert steps(events)[-1] == JobStepProcessingEnum.INSPECTING_MEDIA
+
+
 @pytest.mark.parametrize("staged_file", [None, "missing.mp4", "../project.json", "/etc/passwd", "."])
 def test_invalid_staged_file_fails(storage, project_id, staged_file):
     final, _ = run(storage, upload_request(project_id, staged_file))

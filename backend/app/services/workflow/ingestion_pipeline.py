@@ -29,11 +29,13 @@ from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     check_audio_not_silent,
+    check_packet_integrity,
     check_supported_formats,
     download_youtube_video,
     extract_normalized_audio,
     generate_proxy_video,
     inspect_media,
+    scan_packets,
 )
 from app.services.video.metadata import IngestionOutput, build_technical_metadata
 from app.services.video.sources import probe_remote_video, validate_time_range
@@ -79,6 +81,8 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
                 JobErrorCodeEnum.DURATION_LIMIT_EXCEEDED,
                 ERROR_DURATION_EXCEEDED.format(duration=media.duration_seconds, limit=limit),
             )
+        scan = scan_packets(source_path)
+        check_packet_integrity(scan)
 
         # Audio first: a silent recording is rejected before the proxy is encoded.
         advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
@@ -89,7 +93,7 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
 
         advance(JobStepProcessingEnum.PERSISTING_RESULTS)
-        output = _build_output(storage, request, media, source_path)
+        output = _build_output(storage, request, media, scan.is_vfr, source_path)
     except (MediaRejectedError, MediaProcessingError) as exc:
         return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
@@ -137,12 +141,14 @@ def _fetch_source(
     return source_path
 
 
-def _build_output(storage: LocalStorage, request: JobRequestMessage, media, source_path: Path) -> IngestionOutput:
+def _build_output(
+    storage: LocalStorage, request: JobRequestMessage, media, is_vfr: bool, source_path: Path
+) -> IngestionOutput:
     """Collect what the backend persists when the job completes (FR02 step 6)."""
     url = request.parameters.source_url
     source_type = SourceType.URL if url is not None else SourceType.UPLOAD
     source = str(url) if url is not None else request.file_name
-    metadata = build_technical_metadata(media, source_type, source)
+    metadata = build_technical_metadata(media, is_vfr, source_type, source)
     return IngestionOutput(
         **metadata.model_dump(),
         source_key=source_path.relative_to(storage.project_dir(str(request.project_id))).as_posix(),

@@ -31,6 +31,7 @@ OUTPUT = {
     "height": 720,
     "aspect_ratio": "16:9",
     "frame_rate": 25.0,
+    "is_vfr": True,
     "video_codec": "h264",
     "audio_codec": "aac",
     "sample_rate": 48000,
@@ -102,6 +103,7 @@ def test_a_completed_job_saves_the_technical_metadata(db):
     assert stored.status == MediaAssetStatus.READY
     assert (stored.width, stored.height, stored.aspect_ratio) == (1280, 720, "16:9")
     assert (stored.duration_seconds, stored.frame_rate, stored.sample_rate) == (600.0, 25.0, 48000)
+    assert stored.is_vfr is True
     assert (stored.source_key, stored.proxy_key) == ("source/original.mp4", "proxy/proxy.mp4")
     track = db.scalar(select(AudioTrack).where(AudioTrack.media_asset_id == asset.id))
     assert (track.sample_rate, track.channels, track.format, track.storage_key) == (

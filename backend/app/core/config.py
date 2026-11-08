@@ -177,6 +177,19 @@ ERROR_UNSUPPORTED_CONTAINER = "Video rejected: container format {format_name!r} 
 ERROR_UNSUPPORTED_VIDEO_CODEC = "Video rejected: video codec {codec!r} is not supported."
 ERROR_UNSUPPORTED_AUDIO_CODEC = "Video rejected: audio codec {codec!r} is not supported."
 
+# --- Packet scan during inspection (FR02 step 3) ---
+# H.264 and HEVC reorder at most 16 frames; packets are put in presentation order inside this window.
+VFR_REORDER_WINDOW = 32
+# Consecutive frame intervals are irregular when they differ by more than this share of the shorter one
+# and by more than the rounding of the timestamps (millisecond containers, also after a remux to MP4).
+VFR_INTERVAL_TOLERANCE = 0.05
+VFR_TIMESTAMP_ROUNDING_SECONDS = 0.0015
+# Below this share of irregular intervals the source has dropped frames, not a variable frame rate.
+VFR_MIN_IRREGULAR_SHARE = 0.02
+TRUNCATION_TOLERANCE_SECONDS = 1.0
+ERROR_CORRUPTED_PACKETS = "Video rejected: {count} corrupted packet(s) found in the file."
+ERROR_TRUNCATED_MEDIA = "Video rejected: the file is incomplete, {missing:.1f} s of its declared duration are missing."
+
 # --- Silence detection on the normalized WAV ---
 SILENCE_THRESHOLD_DBFS = -50.0
 SILENCE_WINDOW_SECONDS = 1
@@ -199,6 +212,8 @@ class SourceType(str, Enum):
     URL = "url"
 
 # --- Proxy video (PyAV) ---
+# Demuxers whose packets have no presentation time of their own, only the decode order.
+CONTAINERS_WITHOUT_PRESENTATION_TIMES = ("avi",)
 PROXY_MAX_HEIGHT = 720
 EVEN_DIMENSION = 2
 PROXY_CONTAINER = "mp4"
@@ -435,6 +450,7 @@ ASSET_METADATA_FIELDS = (
     "height",
     "aspect_ratio",
     "frame_rate",
+    "is_vfr",
     "video_codec",
     "audio_codec",
     "sample_rate",
