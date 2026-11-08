@@ -1,4 +1,5 @@
 import math
+import os
 import sys
 from array import array
 from fractions import Fraction
@@ -7,6 +8,10 @@ from typing import Optional
 
 import av
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 # Add the backend root to the Python path so the 'app' module can be found
 backend_root = Path(__file__).resolve().parent.parent
@@ -21,6 +26,7 @@ TONE_AMPLITUDE = 0.5
 # array typecode, full-scale value and converter for the sample formats the test encoders ask for
 # (a trailing "p" in the format name only means planar).
 SAMPLE_TYPES = {"flt": ("f", 1.0, float), "s16": ("h", 32767, int), "s32": ("i", 2**31 - 1, int)}
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5432/pei_test")
 
 
 def _tone_plane(first_sample: int, samples: int, interleaved_channels: int, format_name: str) -> bytes:
@@ -86,3 +92,35 @@ def make_sample(tmp_path):
         return _write_sample(path, video_codec, audio_codec, width, height, seconds, tone)
 
     return factory
+
+
+@pytest.fixture(scope="session")
+def database_url():
+    """Create the separate test database when needed, so tests never touch development data."""
+    url = make_url(TEST_DATABASE_URL)
+    admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as connection:
+            query = text("SELECT 1 FROM pg_database WHERE datname = :name")
+            if connection.scalar(query, {"name": url.database}) is None:
+                connection.execute(text(f'CREATE DATABASE "{url.database}"'))
+    except OperationalError as exc:
+        pytest.fail(f"PostgreSQL is not available; run 'docker compose up -d postgres' first. {exc}", pytrace=False)
+    finally:
+        admin.dispose()
+    return TEST_DATABASE_URL
+
+
+@pytest.fixture
+def db(database_url):
+    """A session on empty tables, recreated for each test."""
+    from app.database import models  # noqa: F401 - registers the tables
+    from app.database.base import Base
+
+    engine = create_engine(database_url)
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as session:
+        yield session
+    Base.metadata.drop_all(engine)
+    engine.dispose()

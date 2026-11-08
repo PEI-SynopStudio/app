@@ -20,7 +20,7 @@ DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
 DEFAULT_LANGUAGE = "pt"
-DEFAULT_DATABASE_URL = "postgresql://pei:pei@postgres:5432/pei"
+DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
 ENV_TRUE_VALUE = "true"
 
@@ -367,6 +367,50 @@ EVENT_IGNORED_OUT_OF_ORDER = "Event older than the most recent one."
 EVENT_IGNORED_EARLIER_STEP = "Step precedes the current one."
 EVENT_IGNORED_LOWER_PROGRESS = "Progress is below the current one."
 EVENT_IGNORED_NO_CHANGE = "Event changes nothing."
+
+
+# --- Database models (FR01, FR02) ---
+class LicenseType(str, Enum):
+    CREATIVE_COMMONS = "creative_commons"
+    INSTITUTIONAL_PERMISSION = "institutional_permission"
+    PUBLIC_DEBATE_RIGHTS = "public_debate_rights"
+
+
+class ProjectStatus(str, Enum):
+    DRAFT = "draft"
+    INGESTING = "ingesting"
+    INGESTED = "ingested"
+    INGESTION_FAILED = "ingestion_failed"
+
+
+class MediaAssetStatus(str, Enum):
+    UPLOADING = "uploading"
+    PROCESSING = "processing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+TABLE_PROJECTS = "projects"
+TABLE_MEDIA_ASSETS = "media_assets"
+TABLE_AUDIO_TRACKS = "audio_tracks"
+FK_PROJECT_ID = f"{TABLE_PROJECTS}.id"
+FK_MEDIA_ASSET_ID = f"{TABLE_MEDIA_ASSETS}.id"
+DB_ON_DELETE_CASCADE = "CASCADE"
+DB_DELETE_ORPHAN_CASCADE = "all, delete-orphan"
+DB_NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+ENUM_COLUMN_LENGTH = 64
+OWNER_ID_MAX_LENGTH = 255
+PROJECT_AUTHOR_MAX_LENGTH = 300
+STORAGE_KEY_MAX_LENGTH = 1024
+CONTAINER_NAME_MAX_LENGTH = 128
+CODEC_NAME_MAX_LENGTH = 64
+ASPECT_RATIO_MAX_LENGTH = 32
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:

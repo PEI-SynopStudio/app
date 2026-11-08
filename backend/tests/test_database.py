@@ -14,12 +14,12 @@ def _clear_caches():
 
 
 @pytest.fixture
-def sqlite_url(tmp_path, monkeypatch):
-    url = f"sqlite:///{tmp_path / 'test.db'}"
-    monkeypatch.setenv("DATABASE_URL", url)
+def configured_url(database_url, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.delenv("DATABASE_ECHO", raising=False)
     _clear_caches()
-    yield url
+    yield database_url
+    get_engine().dispose()
     _clear_caches()
 
 
@@ -27,21 +27,21 @@ def test_base_is_declarative():
     assert issubclass(Base, DeclarativeBase)
 
 
-def test_engine_uses_configured_url(sqlite_url):
-    assert get_engine().url.render_as_string() == sqlite_url
+def test_engine_uses_configured_url(configured_url):
+    assert get_engine().url.render_as_string(hide_password=False) == configured_url
 
 
-def test_sql_echo_is_off_by_default(sqlite_url):
+def test_sql_echo_is_off_by_default(configured_url):
     assert get_engine().echo is False
 
 
-def test_sql_echo_can_be_enabled(sqlite_url, monkeypatch):
+def test_sql_echo_can_be_enabled(configured_url, monkeypatch):
     monkeypatch.setenv("DATABASE_ECHO", "true")
 
     assert get_engine().echo is True
 
 
-def test_get_db_yields_a_working_session_and_closes_it(sqlite_url):
+def test_get_db_yields_a_working_session_and_closes_it(configured_url):
     dependency = get_db()
     session = next(dependency)
 
