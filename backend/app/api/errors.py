@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status
 
+from app.core.exceptions import JobNotFoundError
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectNotFoundError
 from app.services.video.uploads import UploadIncompleteError, UploadNotFoundError
 from app.services.workflow.jobs import IngestionAlreadyRunningError
@@ -10,6 +11,7 @@ SERVICE_ERRORS = (
     ProjectNotFoundError,
     LicenceNotConfirmedError,
     IngestionAlreadyRunningError,
+    JobNotFoundError,
     UploadNotFoundError,
     UploadIncompleteError,
 )
@@ -17,7 +19,7 @@ SERVICE_ERRORS = (
 
 def http_error(exc: Exception) -> HTTPException:
     """Map a service exception to an HTTP error that keeps its descriptive message."""
-    if isinstance(exc, (ProjectNotFoundError, UploadNotFoundError)):
+    if isinstance(exc, (ProjectNotFoundError, UploadNotFoundError, JobNotFoundError)):
         code = status.HTTP_404_NOT_FOUND
     elif isinstance(exc, LicenceNotConfirmedError):
         code = status.HTTP_403_FORBIDDEN

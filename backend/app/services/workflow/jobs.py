@@ -11,9 +11,13 @@ from app.core.config import (
     AUDIT_DETAIL_JOB_ID,
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
+    ERROR_INVALID_JOB_ID,
+    ERROR_JOB_INTERRUPTED,
     JOB_ACTIVE_INGESTION_INDEX,
+    JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
+    LOG_JOBS_INTERRUPTED,
     ApplyOutcome,
     AuditAction,
     JobErrorCodeEnum,
@@ -73,6 +77,16 @@ def create_ingestion_job(
     return job
 
 
+def get_job(db: Session, project_id: str, job_id: str) -> Job:
+    try:
+        job = db.get(Job, uuid.UUID(job_id))
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(ERROR_INVALID_JOB_ID.format(job_id=job_id))
+    if job is None or str(job.project_id) != project_id:
+        raise JobNotFoundError()
+    return job
+
+
 def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
     query = (
         select(Job)
@@ -107,6 +121,18 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
         logger.warning(LOG_JOB_EVENT_REJECTED, event.job_id, result.reason)
     db.commit()
     return result
+
+
+# Fail the jobs a previous server left active, so they do not block their projects forever.
+# Source: temporary until the RabbitMQ worker, because the in-process dispatcher loses running jobs on restart.
+def fail_interrupted_jobs(db: Session) -> int:
+    """Run once when the server starts, before it accepts requests; returns how many jobs were failed."""
+    jobs = db.scalars(select(Job).where(Job.status.in_(JOB_ACTIVE_STATUSES))).all()
+    for job in jobs:
+        fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_INTERRUPTED)
+    if jobs:
+        logger.warning(LOG_JOBS_INTERRUPTED, len(jobs))
+    return len(jobs)
 
 
 def _change_status(

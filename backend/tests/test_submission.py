@@ -1,13 +1,16 @@
+import tempfile
 import uuid
 from datetime import date
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
 
-from app.core.config import JobStatusEnum, LicenseType, MediaAssetStatus, ProjectStatus
-from app.database.models import Job, MediaAsset, Project, UploadSession
+from app.core.config import JobStatusEnum, LicenseType, MediaAssetStatus, ProjectStatus, SourceType
+from app.database.models import AudioTrack, Job, MediaAsset, Project, UploadSession
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import LicenceNotConfirmedError, create_project
+from app.services.storage.local import LocalStorage
 from app.services.video.uploads import start_upload
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.jobs import IngestionAlreadyRunningError
@@ -34,6 +37,11 @@ def dispatcher():
     return RecordingDispatcher()
 
 
+@pytest.fixture
+def storage(tmp_path):
+    return LocalStorage(tmp_path / "media")
+
+
 def make_project(db, licence=True):
     return str(create_project(db, ProjectCreate(
         title="Debate",
@@ -51,8 +59,9 @@ def count(db, model):
     return db.scalar(select(func.count()).select_from(model))
 
 
-def submit_url(db, dispatcher, project_id, start=None, end=None):
-    return submit_url_ingestion(db, dispatcher, project_id, SAMPLE_URL, start, end)
+def submit_url(db, dispatcher, project_id, start=None, end=None, storage=None):
+    storage = storage or LocalStorage(Path(tempfile.gettempdir()) / "unused-media")
+    return submit_url_ingestion(db, storage, dispatcher, project_id, SAMPLE_URL, start, end)
 
 
 def test_url_submission_creates_the_asset_and_queues_the_job(db, dispatcher):
@@ -93,11 +102,11 @@ def test_refused_url_leaves_no_new_asset(db, dispatcher):
     assert (count(db, MediaAsset), len(dispatcher.requests)) == (1, 1)
 
 
-def test_upload_submission_closes_the_session(db, dispatcher):
+def test_upload_submission_closes_the_session(db, storage, dispatcher):
     session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
     upload_id, staged_file = session.id, session.staged_file
 
-    job = submit_upload_ingestion(db, dispatcher, session)
+    job = submit_upload_ingestion(db, storage, dispatcher, session)
 
     assert job.status == JobStatusEnum.QUEUED
     assert count(db, UploadSession) == 0
@@ -105,15 +114,16 @@ def test_upload_submission_closes_the_session(db, dispatcher):
     request = dispatcher.requests[0]
     assert (request.upload_id, request.staged_file, request.file_name) == (upload_id, staged_file, "Debate.mp4")
     assert request.parameters.media_id == job.media_asset_id
+    assert db.get(MediaAsset, job.media_asset_id).source_key == f"source/{staged_file}"
 
 
-def test_refused_upload_keeps_the_session(db, dispatcher):
+def test_refused_upload_keeps_the_session(db, storage, dispatcher):
     project_id = make_project(db)
     submit_url(db, dispatcher, project_id)
     session = start_upload(db, project_id, "Debate.mp4", 10, "video/mp4")
 
     with pytest.raises(IngestionAlreadyRunningError):
-        submit_upload_ingestion(db, dispatcher, session)
+        submit_upload_ingestion(db, storage, dispatcher, session)
 
     assert db.get(UploadSession, uuid.UUID(str(session.id))) is not None
 
@@ -127,3 +137,59 @@ def test_a_broken_broker_fails_the_job(db):
     job = db.scalar(select(Job))
     assert (job.status, job.error_message) == (JobStatusEnum.FAILED, "The job could not be queued; please try again.")
     assert db.get(Project, uuid.UUID(project_id)).status == ProjectStatus.INGESTION_FAILED
+
+
+def finished_asset(db, storage, project_id, status=MediaAssetStatus.READY):
+    """A previous video of the project, with its files on disk."""
+    asset = MediaAsset(
+        project_id=uuid.UUID(project_id),
+        source_type=SourceType.UPLOAD,
+        file_name="old.mp4",
+        status=status,
+        source_key="source/old.mp4",
+        proxy_key="proxy/proxy.mp4",
+    )
+    db.add(asset)
+    db.flush()
+    db.add(AudioTrack(media_asset_id=asset.id, sample_rate=16000, channels=1, format="wav", storage_key="audio/audio.wav"))
+    db.commit()
+    files = [storage.path(project_id, key) for key in ("source/old.mp4", "proxy/proxy.mp4", "audio/audio.wav")]
+    for file in files:
+        file.write_bytes(b"old")
+    return asset, files
+
+
+@pytest.mark.parametrize("status", [MediaAssetStatus.READY, MediaAssetStatus.FAILED])
+def test_a_new_ingestion_replaces_the_previous_video(db, storage, dispatcher, status):
+    project_id = make_project(db)
+    previous, files = finished_asset(db, storage, project_id, status)
+    previous_id = previous.id
+
+    job = submit_url(db, dispatcher, project_id, storage=storage)
+
+    db.expire_all()
+    assert db.get(MediaAsset, previous_id) is None
+    assert db.get(MediaAsset, job.media_asset_id) is not None
+    assert count(db, AudioTrack) == 0
+    assert [file.exists() for file in files] == [False, False, False]
+
+
+def test_an_upload_in_progress_is_not_replaced(db, storage, dispatcher):
+    project_id = make_project(db)
+    start_upload(db, project_id, "Debate.mp4", 10, "video/mp4")
+
+    submit_url(db, dispatcher, project_id, storage=storage)
+
+    assert count(db, MediaAsset) == 2
+    assert count(db, UploadSession) == 1
+
+
+def test_a_refused_ingestion_keeps_the_previous_video(db, storage, dispatcher):
+    project_id = make_project(db)
+    submit_url(db, dispatcher, project_id, storage=storage)
+    _, files = finished_asset(db, storage, project_id)
+
+    with pytest.raises(IngestionAlreadyRunningError):
+        submit_url(db, dispatcher, project_id, storage=storage)
+
+    assert all(file.exists() for file in files)

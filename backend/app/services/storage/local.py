@@ -28,6 +28,10 @@ class LocalStorage:
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
+    def delete(self, project_id: str, key: str) -> None:
+        """Remove a file of the project if it exists; `key` is relative to the project directory."""
+        (self.project_dir(project_id) / key).unlink(missing_ok=True)
+
 
 def get_storage() -> LocalStorage:
     return LocalStorage(get_settings().media_root)

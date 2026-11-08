@@ -1,9 +1,12 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import ingestion, projects, uploads
+from app.api import ingestion, jobs, projects, uploads
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
+from app.database.session import get_session_factory
+from app.services.workflow.jobs import fail_interrupted_jobs
 
 
 def _configure_logging() -> None:
@@ -16,11 +19,19 @@ def _configure_logging() -> None:
         logger.addHandler(handler)
 
 
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    with get_session_factory()() as db:
+        fail_interrupted_jobs(db)
+    yield
+
+
 _configure_logging()
-app = FastAPI(title=APP_TITLE)
+app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
 app.include_router(projects.router)
 app.include_router(ingestion.router)
 app.include_router(uploads.router)
+app.include_router(jobs.router)
 
 @app.get(HEALTH_ROUTE)
 def health():

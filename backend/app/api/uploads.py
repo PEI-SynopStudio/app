@@ -123,6 +123,6 @@ def complete_upload(
     try:
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(storage, session)
-        return submit_upload_ingestion(db, dispatcher, session)
+        return submit_upload_ingestion(db, storage, dispatcher, session)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
