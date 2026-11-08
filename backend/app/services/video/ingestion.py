@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 import av
 from pydantic import BaseModel
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError, download_range_func, parse_duration
+from yt_dlp.utils import DownloadError, download_range_func
 
 from app.core.config import (
     ALLOWED_CONTAINER_FORMATS,
@@ -51,6 +51,7 @@ from app.core.config import (
     SILENCE_WINDOW_SECONDS,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
+    VIDEO_START_SECONDS,
     WAV_BYTE_ORDER,
     WAV_READ_MODE,
     YTDLP_FORMAT_SORT,
@@ -61,6 +62,7 @@ from app.core.config import (
     YTDLP_REMUXER,
     get_settings,
 )
+from app.schemas.timecode import parse_time
 
 
 class StreamInfo(BaseModel):
@@ -298,10 +300,10 @@ def download_youtube_video(
         "outtmpl": str(output_path.with_name(YTDLP_OUTPUT_TEMPLATE.format(stem=output_path.stem))),
     }
 
-    if start_time and end_time:
-        options["download_ranges"] = download_range_func(
-            None, [(parse_duration(start_time), parse_duration(end_time))]
-        )
+    if start_time or end_time:
+        start = float(parse_time(start_time)) if start_time else VIDEO_START_SECONDS
+        end = float(parse_time(end_time)) if end_time else math.inf
+        options["download_ranges"] = download_range_func(None, [(start, end)])
         options["force_keyframes_at_cuts"] = True
 
     try:

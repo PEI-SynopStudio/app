@@ -176,12 +176,12 @@ ERROR_VIDEO_NOT_PUBLIC = (
 ERROR_VIDEO_IS_LIVE = "Video rejected: live or upcoming streams can only be imported after they have ended."
 ERROR_DURATION_UNKNOWN = "Video rejected: its duration could not be determined."
 ERROR_DURATION_EXCEEDED = "Video rejected: duration {duration:.0f} s exceeds the limit of {limit} s."
-ERROR_TIME_RANGE_INCOMPLETE = "Both start and end times are required to import a time range."
 ERROR_INVALID_TIMECODE = "Invalid timecode: {value!r}"
 ERROR_INVALID_TIME_RANGE = (
     "Invalid time range: start ({start:.0f} s) must be before end ({end:.0f} s), "
     "and end must not exceed the video duration ({duration:.0f} s)."
 )
+VIDEO_START_SECONDS = 0.0
 
 # --- Media inspection and audio normalization (PyAV) ---
 STREAM_TYPE_AUDIO = "audio"
@@ -280,6 +280,8 @@ class JobErrorCodeEnum(str, Enum):
     DURATION_LIMIT_EXCEEDED = "duration_limit_exceeded"
     CORRUPTED_MEDIA = "corrupted_media"
     NO_AUDIO_TRACK = "no_audio_track"
+    UNSUPPORTED_FORMAT = "unsupported_format"
+    SILENT_AUDIO = "silent_audio"
     INTERNAL_ERROR = "internal_error"
     TIMEOUT = "timeout"
 

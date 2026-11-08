@@ -152,3 +152,24 @@ def test_matchenum():
     for params in (IngestionParams, TranscriptionParams):
         literal = params.model_fields["job_type"].default
         assert literal in {t.value for t in JobTypeEnum}
+
+
+def test_requestmessage_carries_upload_fields():
+    upload_id = uuid4()
+    msg = JobRequestMessage(
+        job_id=uuid4(),
+        project_id=uuid4(),
+        parameters=IngestionParams(media_id=uuid4()),
+        upload_id=upload_id,
+        staged_file="video.mp4",
+    )
+
+    restored = JobRequestMessage.model_validate_json(msg.model_dump_json())
+    assert (restored.upload_id, restored.staged_file) == (upload_id, "video.mp4")
+
+
+def test_client_cannot_send_internal_upload_fields():
+    with pytest.raises(ValidationError):
+        JobCreateSchema.model_validate(
+            {"parameters": {"job_type": "ingestion", "media_id": str(uuid4()), "staged_file": "../x.mp4"}}
+        )

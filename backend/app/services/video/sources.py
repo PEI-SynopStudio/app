@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError, parse_duration
+from yt_dlp.utils import DownloadError
 
 from app.core.config import (
     ALLOWED_AVAILABILITY,
@@ -13,15 +13,15 @@ from app.core.config import (
     ERROR_DURATION_EXCEEDED,
     ERROR_DURATION_UNKNOWN,
     ERROR_INVALID_TIME_RANGE,
-    ERROR_INVALID_TIMECODE,
     ERROR_INVALID_URL,
-    ERROR_TIME_RANGE_INCOMPLETE,
     ERROR_VIDEO_IS_LIVE,
     ERROR_VIDEO_NOT_PUBLIC,
     ERROR_VIDEO_UNAVAILABLE,
     REJECTED_LIVE_STATUSES,
+    VIDEO_START_SECONDS,
     get_settings,
 )
+from app.schemas.timecode import parse_time
 
 
 class RemoteVideoInfo(BaseModel):
@@ -84,7 +84,7 @@ def probe_remote_video(url: str) -> RemoteVideoInfo:
     )
 
 
-# Parse optional start/end timecodes (HH:MM:SS or seconds) and check 0 <= start < end <= duration.
+# Parse optional start/end timecodes and check 0 <= start < end <= duration; a missing bound is the edge of the video.
 # Source: MS2 FR02 – Step 1 / US05 (time range to import).
 def validate_time_range(
     start_time: Optional[str], end_time: Optional[str], duration_seconds: float
@@ -92,17 +92,9 @@ def validate_time_range(
     """Return the range in seconds, or None when no range was requested."""
     if start_time is None and end_time is None:
         return None
-    if start_time is None or end_time is None:
-        raise ValueError(ERROR_TIME_RANGE_INCOMPLETE)
 
-    start, end = _parse_timecode(start_time), _parse_timecode(end_time)
+    start = float(parse_time(start_time)) if start_time is not None else VIDEO_START_SECONDS
+    end = float(parse_time(end_time)) if end_time is not None else duration_seconds
     if not start < end <= duration_seconds:
         raise ValueError(ERROR_INVALID_TIME_RANGE.format(start=start, end=end, duration=duration_seconds))
     return start, end
-
-
-def _parse_timecode(value: str) -> float:
-    seconds = parse_duration(value)
-    if seconds is None or seconds < 0:
-        raise ValueError(ERROR_INVALID_TIMECODE.format(value=value))
-    return seconds

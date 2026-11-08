@@ -103,7 +103,6 @@ def test_url_ingestion_is_accepted_and_queued(client, dispatcher):
 @pytest.mark.parametrize("body, message", [
     ({"url": "https://example.com/video.mp4"}, "domain not allowed"),
     ({"url": "not a url"}, "Invalid URL"),
-    ({"url": SAMPLE_URL, "start_time": "00:01:00"}, "Both start and end"),
     ({"url": SAMPLE_URL, "start_time": "00:02:00", "end_time": "00:01:00"}, "Invalid time range"),
 ])
 def test_invalid_url_request_is_rejected(client, dispatcher, body, message):
@@ -114,6 +113,17 @@ def test_invalid_url_request_is_rejected(client, dispatcher, body, message):
     assert response.status_code == 422
     assert message in response.json()["detail"]
     assert dispatcher.jobs == []
+
+
+def test_url_ingestion_accepts_an_open_ended_time_range(client, dispatcher):
+    project_id = new_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL, "start_time": "00:01:00"}
+    )
+
+    assert response.status_code == 202
+    assert (dispatcher.jobs[0].start_time, dispatcher.jobs[0].end_time) == ("00:01:00", None)
 
 
 def test_url_ingestion_without_licence_is_forbidden(live):
