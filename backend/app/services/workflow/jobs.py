@@ -25,6 +25,7 @@ from app.database.models import Job
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
+from app.services.workflow.ingestion_results import record_ingestion_outcome
 from app.services.workflow.state_machine import ApplyResult, JobSnapshot, apply_event, change_status
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
     result = apply_event(_snapshot(job), event)
     if result.outcome == ApplyOutcome.APPLIED:
         _store(job, result.job)
+        record_ingestion_outcome(db, job)
     elif result.outcome == ApplyOutcome.REJECTED:
         logger.warning(LOG_JOB_EVENT_REJECTED, event.job_id, result.reason)
     db.commit()
@@ -105,6 +107,7 @@ def _change_status(
     error_message: Optional[str] = None,
 ) -> Job:
     _store(job, change_status(_snapshot(job), target, utc_now(), error_code, error_message))
+    record_ingestion_outcome(db, job)
     db.commit()
     return job
 

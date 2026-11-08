@@ -183,6 +183,7 @@ STREAM_TYPE_VIDEO = "video"
 MEDIA_WRITE_MODE = "w"
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_LAYOUT = "mono"
+AUDIO_CHANNELS = 1
 AUDIO_SAMPLE_FORMAT = "s16"
 AUDIO_CODEC = "pcm_s16le"
 AUDIO_CONTAINER = "wav"
@@ -432,6 +433,23 @@ AUDIT_DETAIL_FILE_NAME = "file_name"
 AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
 AUDIT_DETAIL_JOB_ID = "job_id"
 AUDIT_DETAIL_SOURCE = "source"
+AUDIT_DETAIL_ERROR_CODE = "error_code"
+# Fields of a finished ingestion that are copied to its media asset (FR02 step 6).
+ASSET_METADATA_FIELDS = (
+    "container",
+    "duration_seconds",
+    "size_bytes",
+    "width",
+    "height",
+    "aspect_ratio",
+    "frame_rate",
+    "video_codec",
+    "audio_codec",
+    "sample_rate",
+    "channels",
+    "source_key",
+    "proxy_key",
+)
 LOG_JOB_EVENT_REJECTED = "Event rejected for job %s: %s"
 
 

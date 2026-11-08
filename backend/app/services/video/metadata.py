@@ -31,6 +31,13 @@ class TechnicalMetadata(BaseModel):
     created_at: datetime
 
 
+class IngestionOutput(TechnicalMetadata):
+    """What a finished ingestion reports in its completed event; keys are relative to the project."""
+    source_key: str
+    proxy_key: str
+    audio_key: str
+
+
 # Collect the technical metadata of the original source from its inspection result.
 # Source: MS2 FR02 – Step 6 (runtime, dimensions, aspect ratio, frame rate, sample rate, source URL or file name).
 def build_technical_metadata(media: MediaInfo, source_type: SourceType, source: str) -> TechnicalMetadata:
