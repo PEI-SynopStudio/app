@@ -3,22 +3,20 @@ import uuid
 
 import pytest
 
-from app.core.config import IngestionStage, SourceType, get_settings
+from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, get_settings
+from app.schemas.job import IngestionParams, JobRequestMessage
 from app.services.storage.local import LocalStorage
 from app.services.video import sources as sources_module
-from app.services.video.metadata import get_technical_metadata
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
-from app.services.workflow.ingestion_pipeline import IngestionJob, run_ingestion
-from app.services.workflow.status import get_status
+from app.services.workflow.ingestion_pipeline import run_ingestion
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
-SUCCESS_STAGES = [
-    IngestionStage.INSPECTING,
-    IngestionStage.EXTRACTING_AUDIO,
-    IngestionStage.GENERATING_PROXY,
-    IngestionStage.ANALYSING,
-    IngestionStage.COMPLETED,
+SUCCESS_STEPS = [
+    JobStepProcessingEnum.INSPECTING_MEDIA,
+    JobStepProcessingEnum.EXTRACTING_AUDIO,
+    JobStepProcessingEnum.GENERATING_PROXY,
+    JobStepProcessingEnum.PERSISTING_RESULTS,
 ]
 
 
@@ -32,92 +30,127 @@ def project_id():
     return str(uuid.uuid4())
 
 
+def upload_request(project_id, staged_file="lecture.mp4", **params):
+    return JobRequestMessage(
+        job_id=uuid.uuid4(),
+        project_id=project_id,
+        parameters=IngestionParams(media_id=uuid.uuid4(), **params),
+        staged_file=staged_file,
+        file_name="lecture.mp4",
+    )
+
+
 def stage_upload(storage, project_id, sample, name="lecture.mp4"):
-    """Copy a sample into the project's source directory, as the upload API will do."""
+    """Copy a sample into the project's source directory, as the assembled upload would be."""
     shutil.copy(sample, storage.path(project_id, "source", name))
-    return IngestionJob(project_id=project_id, source_type=SourceType.UPLOAD, source=name, staged_file=name)
+    return upload_request(project_id, name)
 
 
-def run(storage, job):
-    progress = []
-    status = run_ingestion(storage, job, on_progress=progress.append)
-    return status, [update.stage for update in progress]
+def url_request(project_id, url=SAMPLE_URL, **params):
+    return JobRequestMessage(job_id=uuid.uuid4(), project_id=project_id, parameters=IngestionParams(source_url=url, **params))
+
+
+def run(storage, request):
+    events = []
+    final = run_ingestion(storage, request, events.append)
+    return final, events
+
+
+def steps(events):
+    return [event.step for event in events if event.status == JobStatusEnum.PROCESSING]
+
+
+def assert_failed(final, code):
+    assert (final.status, final.error_code) == (JobStatusEnum.FAILED, code)
 
 
 def test_upload_is_ingested(storage, project_id, make_sample):
-    job = stage_upload(storage, project_id, make_sample(tone=True))
+    final, events = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
 
-    status, stages = run(storage, job)
-
-    assert status.stage == IngestionStage.COMPLETED
-    assert stages == SUCCESS_STAGES
-    assert get_status(storage, project_id) == status
+    assert final.status == JobStatusEnum.COMPLETED
+    assert steps(events) == [JobStepProcessingEnum.INITIALIZING, *SUCCESS_STEPS]
+    assert events[-1] == final
     assert storage.path(project_id, "audio", "audio.wav").is_file()
     assert storage.path(project_id, "proxy", "proxy.mp4").is_file()
-    metadata = get_technical_metadata(storage, project_id)
-    assert (metadata.source_type, metadata.source) == (SourceType.UPLOAD, "lecture.mp4")
+    assert (final.output["source_type"], final.output["source"]) == ("upload", "lecture.mp4")
+    assert (final.output["source_key"], final.output["proxy_key"], final.output["audio_key"]) == (
+        "source/lecture.mp4", "proxy/proxy.mp4", "audio/audio.wav"
+    )
+
+
+def test_every_event_identifies_the_job_and_attempt(storage, project_id, make_sample):
+    request = stage_upload(storage, project_id, make_sample(tone=True))
+
+    _, events = run(storage, request)
+
+    assert {(event.job_id, event.attempt) for event in events} == {(request.job_id, 1)}
 
 
 def test_silent_upload_fails_before_proxy(storage, project_id, make_sample):
-    job = stage_upload(storage, project_id, make_sample())
+    final, events = run(storage, stage_upload(storage, project_id, make_sample()))
 
-    status, stages = run(storage, job)
-
-    assert status.stage == IngestionStage.FAILED
-    assert status.error.code == "silent_audio"
-    assert "silent" in status.error.message
-    assert stages[-2:] == [IngestionStage.EXTRACTING_AUDIO, IngestionStage.FAILED]
+    assert_failed(final, JobErrorCodeEnum.SILENT_AUDIO)
+    assert "silent" in final.error_message
+    assert steps(events)[-1] == JobStepProcessingEnum.EXTRACTING_AUDIO
     assert not storage.path(project_id, "proxy", "proxy.mp4").exists()
 
 
 def test_unsupported_codec_fails(storage, project_id, make_sample):
-    job = stage_upload(storage, project_id, make_sample("mkv", "mpeg4", "aac", tone=True), "lecture.mkv")
+    sample = make_sample("mkv", "mpeg4", "aac", tone=True)
 
-    status, _ = run(storage, job)
+    final, _ = run(storage, stage_upload(storage, project_id, sample, "lecture.mkv"))
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "unsupported_format")
-    assert "video codec" in status.error.message
+    assert_failed(final, JobErrorCodeEnum.UNSUPPORTED_FORMAT)
+    assert "video codec" in final.error_message
 
 
 def test_upload_longer_than_limit_fails(storage, project_id, make_sample, monkeypatch):
     monkeypatch.setenv("MAX_DURATION_SECONDS", "1")
     get_settings.cache_clear()
     try:
-        status, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
+        final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
     finally:
         get_settings.cache_clear()
 
-    assert "exceeds the limit" in status.error.message
-    assert status.error.code == "duration_limit_exceeded"
+    assert_failed(final, JobErrorCodeEnum.DURATION_LIMIT_EXCEEDED)
+    assert "exceeds the limit" in final.error_message
 
 
 def test_corrupted_upload_fails_as_processing_error(storage, project_id, tmp_path):
     corrupted = tmp_path / "corrupted.mp4"
     corrupted.write_bytes(b"not a video" * 100)
 
-    status, _ = run(storage, stage_upload(storage, project_id, corrupted))
+    final, _ = run(storage, stage_upload(storage, project_id, corrupted))
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "corrupted_media")
+    assert_failed(final, JobErrorCodeEnum.CORRUPTED_MEDIA)
 
 
 @pytest.mark.parametrize("staged_file", [None, "missing.mp4", "../project.json", "/etc/passwd", "."])
 def test_invalid_staged_file_fails(storage, project_id, staged_file):
-    job = IngestionJob(
-        project_id=project_id, source_type=SourceType.UPLOAD, source="x.mp4", staged_file=staged_file
-    )
+    final, _ = run(storage, upload_request(project_id, staged_file))
 
-    status, _ = run(storage, job)
-
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
+    assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
 
 
-def test_upload_time_range_is_not_supported_yet(storage, project_id, make_sample):
-    job = stage_upload(storage, project_id, make_sample(tone=True))
-    job.start_time, job.end_time = "0", "1"
+def test_upload_time_range_is_not_supported_yet(storage, project_id):
+    final, _ = run(storage, upload_request(project_id, time_start="0", time_end="1"))
 
-    status, _ = run(storage, job)
+    assert "not supported for uploaded files" in final.error_message
 
-    assert "not supported for uploaded files" in status.error.message
+
+def test_chunks_are_assembled_by_the_job(storage, project_id, make_sample):
+    data = make_sample(tone=True).read_bytes()
+    upload_id = uuid.uuid4()
+    for index in range(2):
+        part = data[:len(data) // 2] if index == 0 else data[len(data) // 2:]
+        storage.path(project_id, "uploads", str(upload_id), "chunks", f"{index:06d}").write_bytes(part)
+    request = upload_request(project_id, "assembled.mp4").model_copy(update={"upload_id": upload_id})
+
+    final, _ = run(storage, request)
+
+    assert final.status == JobStatusEnum.COMPLETED
+    assert storage.path(project_id, "source", "assembled.mp4").read_bytes() == data
+    assert not (storage.project_dir(project_id) / "uploads" / str(upload_id)).exists()
 
 
 def test_unexpected_error_is_recorded_and_raised(storage, project_id, make_sample, monkeypatch):
@@ -125,10 +158,11 @@ def test_unexpected_error_is_recorded_and_raised(storage, project_id, make_sampl
         raise KeyError("bug")
 
     monkeypatch.setattr(ingestion_pipeline, "check_supported_formats", broken)
+    events = []
 
     with pytest.raises(KeyError):
-        run_ingestion(storage, stage_upload(storage, project_id, make_sample(tone=True)))
-    assert get_status(storage, project_id).error.code == "internal_error"
+        run_ingestion(storage, stage_upload(storage, project_id, make_sample(tone=True)), events.append)
+    assert events[-1].error_code == JobErrorCodeEnum.INTERNAL_ERROR
 
 
 def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkeypatch):
@@ -145,61 +179,40 @@ def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkey
 
     monkeypatch.setattr(ingestion_pipeline, "probe_remote_video", fake_probe)
     monkeypatch.setattr(ingestion_pipeline, "download_youtube_video", fake_download)
-    job = IngestionJob(
-        project_id=project_id, source_type=SourceType.URL, source=SAMPLE_URL, start_time="10", end_time="30"
-    )
 
-    status, stages = run(storage, job)
+    final, events = run(storage, url_request(project_id, time_start="10", time_end="30"))
 
-    assert status.stage == IngestionStage.COMPLETED
-    assert stages == [IngestionStage.DOWNLOADING, *SUCCESS_STAGES]
+    assert final.status == JobStatusEnum.COMPLETED
+    assert steps(events) == [
+        JobStepProcessingEnum.INITIALIZING, JobStepProcessingEnum.DOWNLOADING_MEDIA, *SUCCESS_STEPS
+    ]
     assert downloads == [(SAMPLE_URL, "10", "30")]
-    assert get_technical_metadata(storage, project_id).source == SAMPLE_URL
+    assert (final.output["source"], final.output["source_key"]) == (SAMPLE_URL, "source/original.mp4")
 
 
 def test_url_from_other_domain_fails(storage, project_id):
     # The real probe rejects the domain before any network call.
-    job = IngestionJob(project_id=project_id, source_type=SourceType.URL, source="https://example.com/video.mp4")
+    final, _ = run(storage, url_request(project_id, "https://example.com/video.mp4"))
 
-    status, _ = run(storage, job)
-
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
-    assert "domain not allowed" in status.error.message
+    assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
+    assert "domain not allowed" in final.error_message
 
 
 def test_url_time_range_beyond_duration_fails(storage, project_id, monkeypatch):
     monkeypatch.setattr(
         ingestion_pipeline, "probe_remote_video", lambda url: RemoteVideoInfo(url=url, duration_seconds=600)
     )
-    job = IngestionJob(
-        project_id=project_id, source_type=SourceType.URL, source=SAMPLE_URL,
-        start_time="00:20:00", end_time="00:30:00",
-    )
 
-    status, _ = run(storage, job)
+    final, _ = run(storage, url_request(project_id, time_start="00:20:00", time_end="00:30:00"))
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
-    assert "Invalid time range" in status.error.message
-
-
-def test_new_run_clears_previous_metadata(storage, project_id, make_sample):
-    run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
-    assert get_technical_metadata(storage, project_id) is not None
-
-    status, _ = run(storage, IngestionJob(
-        project_id=project_id, source_type=SourceType.URL, source="https://example.com/video.mp4"
-    ))
-
-    assert status.stage == IngestionStage.FAILED
-    assert get_technical_metadata(storage, project_id) is None
+    assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
+    assert "Invalid time range" in final.error_message
 
 
 def test_video_without_audio_track_is_reported(storage, project_id, make_sample):
-    job = stage_upload(storage, project_id, make_sample(audio_codec=None))
+    final, _ = run(storage, stage_upload(storage, project_id, make_sample(audio_codec=None)))
 
-    status, _ = run(storage, job)
-
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "no_audio_track")
+    assert_failed(final, JobErrorCodeEnum.NO_AUDIO_TRACK)
 
 
 def test_private_video_is_reported_as_unavailable(storage, project_id, monkeypatch):
@@ -218,6 +231,6 @@ def test_private_video_is_reported_as_unavailable(storage, project_id, monkeypat
 
     monkeypatch.setattr(sources_module, "YoutubeDL", PrivateVideo)
 
-    status, _ = run(storage, IngestionJob(project_id=project_id, source_type=SourceType.URL, source=SAMPLE_URL))
+    final, _ = run(storage, url_request(project_id))
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "source_unavailable")
+    assert_failed(final, JobErrorCodeEnum.SOURCE_UNAVAILABLE)

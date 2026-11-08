@@ -3,6 +3,7 @@ import uuid
 from dataclasses import fields
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -70,6 +71,15 @@ def create_ingestion_job(
     )
     db.commit()
     return job
+
+
+def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id, Job.job_type == JobTypeEnum.INGESTION)
+        .order_by(Job.created_at.desc())
+    )
+    return db.scalars(query).first()
 
 
 def queue_job(db: Session, job: Job) -> Job:

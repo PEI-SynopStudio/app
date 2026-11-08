@@ -4,18 +4,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import IngestionStage
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
-from app.services.workflow.dispatcher import (
-    IngestionAlreadyRunningError,
-    InProcessDispatcher,
-    JobDispatcher,
-    get_dispatcher,
-)
-from app.services.workflow.status import set_stage
+from app.services.workflow.dispatcher import InProcessDispatcher, JobDispatcher, get_dispatcher
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 JOIN_TIMEOUT_SECONDS = 60
@@ -33,14 +26,11 @@ PROJECT_BODY = {
 class RecordingDispatcher(JobDispatcher):
     """Accepts jobs without running them, so endpoint tests stay fast and offline."""
 
-    def __init__(self, storage):
-        self.storage, self.jobs = storage, []
+    def __init__(self):
+        self.requests = []
 
-    def dispatch(self, job):
-        if any(queued.project_id == job.project_id for queued in self.jobs):
-            raise IngestionAlreadyRunningError("already running")
-        self.jobs.append(job)
-        return set_stage(self.storage, job.project_id, IngestionStage.QUEUED)
+    def dispatch(self, request):
+        self.requests.append(request)
 
 
 @pytest.fixture
@@ -49,8 +39,8 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def dispatcher(storage):
-    return RecordingDispatcher(storage)
+def dispatcher():
+    return RecordingDispatcher()
 
 
 @pytest.fixture
@@ -102,9 +92,9 @@ def test_url_ingestion_is_accepted_and_queued(client, dispatcher):
     )
 
     assert response.status_code == 202
-    assert response.json()["stage"] == "queued"
-    job = dispatcher.jobs[0]
-    assert (job.source, job.start_time, job.end_time) == (SAMPLE_URL, "00:01:07", "00:01:27")
+    assert response.json()["status"] == "queued"
+    params = dispatcher.requests[0].parameters
+    assert (str(params.source_url), params.time_start, params.time_end) == (SAMPLE_URL, "00:01:07", "00:01:27")
 
 
 @pytest.mark.parametrize("body, message", [
@@ -119,7 +109,7 @@ def test_invalid_url_request_is_rejected(client, dispatcher, body, message):
 
     assert response.status_code == 422
     assert message in response.json()["detail"]
-    assert dispatcher.jobs == []
+    assert dispatcher.requests == []
 
 
 def test_url_ingestion_accepts_an_open_ended_time_range(client, dispatcher):
@@ -130,7 +120,8 @@ def test_url_ingestion_accepts_an_open_ended_time_range(client, dispatcher):
     )
 
     assert response.status_code == 202
-    assert (dispatcher.jobs[0].start_time, dispatcher.jobs[0].end_time) == ("00:01:00", None)
+    params = dispatcher.requests[0].parameters
+    assert (params.time_start, params.time_end) == ("00:01:00", None)
 
 
 def test_url_ingestion_without_licence_is_forbidden(live):
@@ -188,10 +179,12 @@ def test_url_ingestion_end_to_end(live, fake_youtube, make_sample):
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
     assert accepted.status_code == 202
-    assert body["status"]["stage"] == "completed"
+    assert (body["job"]["status"], body["job"]["progress"], body["job"]["message"]) == (
+        "completed", 100, "Ingestion completed"
+    )
     assert body["metadata"]["source"] == SAMPLE_URL
     assert body["metadata"]["aspect_ratio"] == "4:3"
-    assert [event.project_id for event in events] == [project_id]
+    assert [str(event.project_id) for event in events] == [project_id]
 
 
 def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample):
@@ -203,8 +196,8 @@ def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample)
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
-    assert body["status"]["stage"] == "ingestion_failed"
-    assert body["status"]["error"]["code"] == "silent_audio"
-    assert "silent" in body["status"]["error"]["message"]
+    assert (body["job"]["status"], body["job"]["error_code"]) == ("failed", "silent_audio")
+    assert "silent" in body["job"]["error_message"]
+    assert client.get(f"/projects/{project_id}").json()["status"] == "ingestion_failed"
     assert body["metadata"] is None
     assert events == []

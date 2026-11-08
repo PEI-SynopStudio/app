@@ -4,13 +4,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.core.config import AuditAction, IngestionStage, MediaAssetStatus, get_settings
+from app.core.config import AuditAction, JobErrorCodeEnum, MediaAssetStatus, get_settings
 from app.database.base import utc_now
-from app.database.models import AuditLog, MediaAsset, UploadSession
+from app.database.models import AuditLog, Job, MediaAsset, UploadSession
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.workflow.dispatcher import InProcessDispatcher, get_dispatcher
-from app.services.workflow.status import set_stage
+from app.services.workflow.jobs import fail_job
 
 CHUNK_SIZE = 4096
 JOIN_TIMEOUT_SECONDS = 60
@@ -185,8 +185,8 @@ def test_chunked_upload_is_assembled_and_ingested(live, storage, make_sample):
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
     assert accepted.status_code == 202
-    assert accepted.json()["stage"] == "queued"
-    assert body["status"]["stage"] == "completed"
+    assert accepted.json()["status"] == "queued"
+    assert body["job"]["status"] == "completed"
     assert body["metadata"]["source"] == "Lecture 1.mp4"
     assert storage.path(project_id, "source", f"{upload_id}.mp4").read_bytes() == data
     assert not (storage.project_dir(project_id) / "uploads" / upload_id).exists()
@@ -202,19 +202,21 @@ def test_renamed_non_video_file_fails_inspection(live):
     client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
 
-    status = client.get(f"/projects/{project_id}/ingestion").json()["status"]
-    assert (status["stage"], status["error"]["code"]) == ("ingestion_failed", "corrupted_media")
+    job = client.get(f"/projects/{project_id}/ingestion").json()["job"]
+    assert (job["status"], job["error_code"]) == ("failed", "corrupted_media")
 
 
-def test_complete_can_be_retried_after_conflict(live, make_sample):
+def test_complete_can_be_retried_after_conflict(live, db, monkeypatch):
     client, dispatcher, _ = live
     project_id = new_project(client)
-    upload_id = upload_all(client, project_id, make_sample(tone=True).read_bytes())
-    dispatcher.is_running = lambda pid: True  # pretend another job of this project is running
+    first = upload_all(client, project_id, b"x" * 10_000)
+    second = upload_all(client, project_id, b"y" * 10_000)
+    monkeypatch.setattr(dispatcher, "dispatch", lambda request: None)  # the first job stays active
+    client.post(f"/projects/{project_id}/uploads/{first}/complete")
 
-    refused = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
-    del dispatcher.is_running
-    retried = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
+    refused = client.post(f"/projects/{project_id}/uploads/{second}/complete")
+    fail_job(db, db.scalar(select(Job)), JobErrorCodeEnum.INTERNAL_ERROR, "Stopped")
+    retried = client.post(f"/projects/{project_id}/uploads/{second}/complete")
 
     assert (refused.status_code, retried.status_code) == (409, 202)
 
@@ -246,9 +248,7 @@ def test_complete_leaves_the_assembly_to_the_job(live, storage, db, monkeypatch)
     client, dispatcher, _ = live
     project_id = new_project(client)
     upload_id = upload_all(client, project_id, b"x" * 10_000)
-    monkeypatch.setattr(
-        dispatcher, "dispatch", lambda job: set_stage(storage, job.project_id, IngestionStage.QUEUED)
-    )
+    monkeypatch.setattr(dispatcher, "dispatch", lambda request: None)
 
     response = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
 

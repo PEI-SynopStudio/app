@@ -1,8 +1,6 @@
 import logging
-from pathlib import Path
-from typing import Callable, Optional
-
-from pydantic import BaseModel
+from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from app.core.config import (
     AUDIO_DIR,
@@ -13,17 +11,21 @@ from app.core.config import (
     ERROR_INTERNAL,
     ERROR_INVALID_STAGED_FILE,
     ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED,
+    JSON_DUMP_MODE,
     LOG_INGESTION_FAILED,
+    PROGRESS_MAX,
+    PROGRESS_MIN,
     PROXY_DIR,
     PROXY_FILE,
     SOURCE_DIR,
-    STAGE_MESSAGES,
-    IngestionStage,
     JobErrorCodeEnum,
+    JobStatusEnum,
+    JobStepProcessingEnum,
     SourceType,
     get_settings,
 )
 from app.core.exceptions import MediaProcessingError, MediaRejectedError
+from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     check_audio_not_silent,
@@ -33,62 +35,42 @@ from app.services.video.ingestion import (
     generate_proxy_video,
     inspect_media,
 )
-from app.services.video.metadata import (
-    build_technical_metadata,
-    clear_technical_metadata,
-    save_technical_metadata,
-)
+from app.services.video.metadata import IngestionOutput, build_technical_metadata
 from app.services.video.sources import probe_remote_video, validate_time_range
 from app.services.video.uploads import assemble_chunks
-from app.services.workflow.status import IngestionStatus, mark_failed, set_stage
 
 logger = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[IngestionStatus], None]
+EventEmitter = Callable[[JobUpdateEventSchema], None]
 
 
-class IngestionJob(BaseModel):
-    """One ingestion request; later this is the body of the RabbitMQ job message."""
-    project_id: str
-    source_type: SourceType
-    # The original URL, or the original file name of an upload (kept in the metadata).
-    source: str
-    # Uploads only: name of the assembled file inside the project's source directory.
-    staged_file: Optional[str] = None
-    # Uploads only: the session whose chunks must be assembled into staged_file.
-    upload_id: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-
-
-# Run FR02 steps 2–6 in order and record the stage after each one; any failure ends in 'Ingestion Failed'.
+# Run FR02 steps 2–6 in order and report each step as an event; any failure ends in a failed event.
 # Source: MS2 FR02 – Steps 2 to 6; architecture §4 step 2.
-def run_ingestion(
-    storage: LocalStorage, job: IngestionJob, on_progress: Optional[ProgressCallback] = None
-) -> IngestionStatus:
-    """Blocking: call it from a worker, never from an endpoint.
+def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: EventEmitter) -> JobUpdateEventSchema:
+    """Blocking: call it from a worker, never from an endpoint. Returns the final event.
 
-    Business-rule rejections and processing errors are stored as a failed status and returned.
-    Unexpected errors are stored as well, then re-raised so the worker logs them.
+    Business-rule rejections and processing errors end in a failed event, which is returned.
+    Unexpected errors emit a failed event as well, then are re-raised so the worker logs them.
     The project and its licence (FR01) are checked before the job exists: workers have no database access.
     """
-    project_id = job.project_id
+    project_id = str(request.project_id)
 
-    def advance(stage: IngestionStage) -> None:
-        _notify(on_progress, set_stage(storage, project_id, stage, STAGE_MESSAGES[stage]))
+    def publish(**fields) -> JobUpdateEventSchema:
+        event = JobUpdateEventSchema(job_id=request.job_id, attempt=request.attempt, **fields)
+        emit(event)
+        return event
 
-    def fail(code: JobErrorCodeEnum, message: str) -> IngestionStatus:
-        status = mark_failed(storage, project_id, code.value, message)
-        _notify(on_progress, status)
-        return status
+    def advance(step: JobStepProcessingEnum) -> None:
+        publish(status=JobStatusEnum.PROCESSING, step=step, step_progress=PROGRESS_MIN)
 
-    # A new run replaces the previous one: its old metadata must not be shown next to the new status.
-    clear_technical_metadata(storage, project_id)
+    def fail(code: JobErrorCodeEnum, message: str) -> JobUpdateEventSchema:
+        return publish(status=JobStatusEnum.FAILED, step_progress=PROGRESS_MIN, error_code=code, error_message=message)
 
     try:
-        source_path = _fetch_source(storage, job, advance)
+        advance(JobStepProcessingEnum.INITIALIZING)
+        source_path = _fetch_source(storage, request, advance)
 
-        advance(IngestionStage.INSPECTING)
+        advance(JobStepProcessingEnum.INSPECTING_MEDIA)
         media = inspect_media(source_path)
         check_supported_formats(media)
         limit = get_settings().max_duration_seconds
@@ -99,15 +81,15 @@ def run_ingestion(
             )
 
         # Audio first: a silent recording is rejected before the proxy is encoded.
-        advance(IngestionStage.EXTRACTING_AUDIO)
+        advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
         audio_path = extract_normalized_audio(source_path, storage.path(project_id, AUDIO_DIR, AUDIO_FILE))
         check_audio_not_silent(audio_path)
 
-        advance(IngestionStage.GENERATING_PROXY)
+        advance(JobStepProcessingEnum.GENERATING_PROXY)
         generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
 
-        advance(IngestionStage.ANALYSING)
-        save_technical_metadata(storage, project_id, build_technical_metadata(media, job.source_type, job.source))
+        advance(JobStepProcessingEnum.PERSISTING_RESULTS)
+        output = _build_output(storage, request, media, source_path)
     except (MediaRejectedError, MediaProcessingError) as exc:
         return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
@@ -119,40 +101,51 @@ def run_ingestion(
         fail(JobErrorCodeEnum.INTERNAL_ERROR, ERROR_INTERNAL)
         raise
 
-    status = set_stage(storage, project_id, IngestionStage.COMPLETED, STAGE_MESSAGES[IngestionStage.COMPLETED])
-    _notify(on_progress, status)
-    return status
+    return publish(status=JobStatusEnum.COMPLETED, step_progress=PROGRESS_MAX, output=output.model_dump(mode=JSON_DUMP_MODE))
 
 
-def _fetch_source(storage: LocalStorage, job: IngestionJob, advance: Callable[[IngestionStage], None]) -> Path:
-    """Return the path of the source video: download it (URL) or locate the staged upload."""
-    if job.source_type == SourceType.URL:
-        advance(IngestionStage.DOWNLOADING)
-        remote = probe_remote_video(job.source)
-        validate_time_range(job.start_time, job.end_time, remote.duration_seconds)
+def _fetch_source(
+    storage: LocalStorage, request: JobRequestMessage, advance: Callable[[JobStepProcessingEnum], None]
+) -> Path:
+    """Return the path of the source video: download it (URL) or assemble and locate the upload."""
+    project_id = str(request.project_id)
+    params = request.parameters
+    if params.source_url is not None:
+        advance(JobStepProcessingEnum.DOWNLOADING_MEDIA)
+        remote = probe_remote_video(str(params.source_url))
+        validate_time_range(params.time_start, params.time_end, remote.duration_seconds)
         return download_youtube_video(
             remote.url,
-            storage.path(job.project_id, SOURCE_DIR, DOWNLOAD_FILE),
-            job.start_time,
-            job.end_time,
+            storage.path(project_id, SOURCE_DIR, DOWNLOAD_FILE),
+            params.time_start,
+            params.time_end,
         )
 
-    if job.start_time is not None or job.end_time is not None:
+    if params.time_start is not None or params.time_end is not None:
         raise ValueError(ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED)
-    if not job.staged_file:
-        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=job.staged_file))
-    source_dir = storage.project_dir(job.project_id) / SOURCE_DIR
-    source_path = source_dir / job.staged_file
+    if not request.staged_file:
+        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
+    source_dir = storage.project_dir(project_id) / SOURCE_DIR
+    source_path = source_dir / request.staged_file
     # Only a file directly inside the project's source directory is accepted (no "..", "/" or symlinks out).
     if source_path.resolve().parent != source_dir.resolve():
-        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=job.staged_file))
-    if job.upload_id is not None:
-        assemble_chunks(storage, job.project_id, job.upload_id, job.staged_file)
+        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
+    if request.upload_id is not None:
+        assemble_chunks(storage, project_id, str(request.upload_id), request.staged_file)
     if not source_path.is_file():
-        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=job.staged_file))
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=request.staged_file))
     return source_path
 
 
-def _notify(on_progress: Optional[ProgressCallback], status: IngestionStatus) -> None:
-    if on_progress is not None:
-        on_progress(status)
+def _build_output(storage: LocalStorage, request: JobRequestMessage, media, source_path: Path) -> IngestionOutput:
+    """Collect what the backend persists when the job completes (FR02 step 6)."""
+    url = request.parameters.source_url
+    source_type = SourceType.URL if url is not None else SourceType.UPLOAD
+    source = str(url) if url is not None else request.file_name
+    metadata = build_technical_metadata(media, source_type, source)
+    return IngestionOutput(
+        **metadata.model_dump(),
+        source_key=source_path.relative_to(storage.project_dir(str(request.project_id))).as_posix(),
+        proxy_key=PurePosixPath(PROXY_DIR, PROXY_FILE).as_posix(),
+        audio_key=PurePosixPath(AUDIO_DIR, AUDIO_FILE).as_posix(),
+    )

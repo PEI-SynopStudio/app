@@ -15,13 +15,12 @@ from app.core.config import (
     UPLOAD_COMPLETE_ROUTE,
     UPLOAD_ROUTE,
     UPLOADS_ROUTE,
-    SourceType,
 )
 from app.database.models import UploadSession
 from app.database.session import get_db
+from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.uploads import (
-    close_upload,
     get_upload,
     missing_chunks,
     require_all_chunks,
@@ -29,8 +28,7 @@ from app.services.video.uploads import (
     start_upload,
 )
 from app.services.workflow.dispatcher import JobDispatcher, get_dispatcher
-from app.services.workflow.ingestion_pipeline import IngestionJob
-from app.services.workflow.status import IngestionStatus
+from app.services.workflow.submission import submit_upload_ingestion
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[INGESTION_ROUTE_TAG])
 
@@ -113,7 +111,7 @@ def upload_chunk(
 
 # Check that every chunk arrived and queue the job, which assembles them outside the request.
 # Source: MS2 FR02 – Step 2 and Outputs (asynchronous ingestion, no UI blocking).
-@router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=IngestionStatus)
+@router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
 def complete_upload(
     project_id: str,
     upload_id: str,
@@ -125,14 +123,6 @@ def complete_upload(
     try:
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(storage, session)
-        queued = dispatcher.dispatch(IngestionJob(
-            project_id=project_id,
-            source_type=SourceType.UPLOAD,
-            source=session.file_name,
-            staged_file=session.staged_file,
-            upload_id=str(session.id),
-        ))
+        return submit_upload_ingestion(db, dispatcher, session)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
-    close_upload(db, session)
-    return queued

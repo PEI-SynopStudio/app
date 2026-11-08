@@ -28,8 +28,6 @@ ENV_TRUE_VALUE = "true"
 
 # --- Storage layout ---
 PROJECTS_DIR = "projects"
-JSON_ENCODING = "utf-8"
-JSON_INDENT = 2
 TMP_SUFFIX = ".tmp"
 
 # --- Error messages ---
@@ -40,7 +38,6 @@ ERROR_LICENCE_NOT_CONFIRMED = (
 )
 
 # --- Project documents ---
-INGESTION_STATUS_FILE = "ingestion.json"
 JSON_DUMP_MODE = "json"
 PROJECT_TITLE_MIN_LENGTH = 1
 PROJECT_TITLE_MAX_LENGTH = 300
@@ -73,30 +70,6 @@ FILE_NAME_MAX_LENGTH = 255
 CONTENT_TYPE_MAX_LENGTH = 100
 
 
-# --- Ingestion stages (FR02) ---
-class IngestionStage(str, Enum):
-    QUEUED = "queued"
-    DOWNLOADING = "downloading"
-    INSPECTING = "inspecting"
-    EXTRACTING_AUDIO = "extracting_audio"
-    GENERATING_PROXY = "generating_proxy"
-    ANALYSING = "analysing"
-    COMPLETED = "completed"
-    FAILED = "ingestion_failed"
-
-
-# Progress messages shown to the user for each stage (FR02 outputs).
-STAGE_MESSAGES = {
-    IngestionStage.QUEUED: "Waiting to start",
-    IngestionStage.DOWNLOADING: "Downloading from URL",
-    IngestionStage.INSPECTING: "Inspecting media",
-    IngestionStage.EXTRACTING_AUDIO: "Extracting audio",
-    IngestionStage.GENERATING_PROXY: "Generating preview video",
-    IngestionStage.ANALYSING: "Saving technical metadata",
-    IngestionStage.COMPLETED: "Ingestion completed",
-}
-
-
 # --- Ingestion pipeline: per-project file layout ---
 SOURCE_DIR = "source"
 AUDIO_DIR = "audio"
@@ -117,6 +90,8 @@ INGESTION_THREAD_NAME = "ingestion-{project_id}"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
 LOG_EVENT_PUBLISHED = "Event %s published: %s"
 LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
+LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
+ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
 # --- Chunked upload (FR02 step 1) ---
 UPLOADS_DIR = "uploads"
@@ -213,7 +188,6 @@ ERROR_SILENT_AUDIO = (
 )
 
 # --- Technical metadata (FR02 step 6) ---
-METADATA_FILE = "metadata.json"
 ASPECT_RATIO_FORMAT = "{numerator}:{denominator}"
 
 
@@ -315,6 +289,16 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
+# Progress messages shown to the user for each step (FR02 outputs).
+JOB_STEP_MESSAGES = {
+    JobStepProcessingEnum.INITIALIZING: "Preparing the video",
+    JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
+    JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
+    JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
+    JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
+    JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
+    JobStepProcessingEnum.FINISHED: "Ingestion completed",
+}
 PROGRESS_DECIMALS = 2
 # A job only reaches 100% when the worker reports it as completed.
 JOB_RUNNING_PROGRESS_CAP = 99.0

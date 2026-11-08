@@ -4,13 +4,10 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.core.config import (
-    JSON_DUMP_MODE,
-    METADATA_FILE,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
     SourceType,
 )
-from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import MediaInfo
 
 
@@ -60,16 +57,3 @@ def build_technical_metadata(media: MediaInfo, source_type: SourceType, source: 
         channels=audio.channels,
         created_at=datetime.now(timezone.utc),
     )
-
-
-def save_technical_metadata(storage: LocalStorage, project_id: str, metadata: TechnicalMetadata) -> None:
-    storage.write_json(project_id, METADATA_FILE, metadata.model_dump(mode=JSON_DUMP_MODE))
-
-
-def clear_technical_metadata(storage: LocalStorage, project_id: str) -> None:
-    storage.delete(project_id, METADATA_FILE)
-
-
-def get_technical_metadata(storage: LocalStorage, project_id: str) -> Optional[TechnicalMetadata]:
-    data = storage.read_json(project_id, METADATA_FILE)
-    return TechnicalMetadata.model_validate(data) if data is not None else None

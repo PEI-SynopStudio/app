@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, computed_field, model_validator
 
 from app.core.config import (
     ERROR_EVENT_CODE_NOT_ALLOWED,
@@ -12,6 +12,7 @@ from app.core.config import (
     ERROR_JOB_SOURCE_REQUIRED,
     ERROR_JOB_TIME_ORDER,
     FIRST_JOB_ATTEMPT,
+    JOB_STEP_MESSAGES,
     LANGUAGE_CODE_PATTERN,
     PROGRESS_MAX,
     PROGRESS_MIN,
@@ -88,9 +89,11 @@ class JobRequestMessage(BaseModel):
     project_id: UUID
     attempt: int = Field(default=FIRST_JOB_ATTEMPT, ge=FIRST_JOB_ATTEMPT)
     parameters: JobParameters
-    # Uploads only, set by the API and never by a client: the chunks to assemble and the target file name.
+    # Uploads only, set by the API and never by a client: the chunks to assemble, the target file name
+    # and the original name, which is kept in the technical metadata.
     upload_id: UUID | None = None
     staged_file: str | None = None
+    file_name: str | None = None
     requested_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -135,3 +138,9 @@ class JobStatusResponseSchema(BaseModel):
     updated_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+    @computed_field
+    @property
+    def message(self) -> str | None:
+        """The progress text of the current step (FR02 outputs)."""
+        return JOB_STEP_MESSAGES.get(self.step)

@@ -1,143 +1,174 @@
-import logging
 import threading
-from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from functools import lru_cache
-from pathlib import PurePosixPath
-from typing import Callable, Dict, Optional
+import uuid
+from datetime import date
 
-from pydantic import BaseModel
-from sqlalchemy.orm import Session, sessionmaker
+import pytest
+from sqlalchemy import select
 
 from app.core.config import (
-    AUDIO_DIR,
-    AUDIO_FILE,
-    ERROR_INGESTION_ALREADY_RUNNING,
-    INGESTION_THREAD_NAME,
-    JSON_DUMP_MODE,
-    LOG_EVENT_PUBLISHED,
-    LOG_JOB_CRASHED,
-    MEDIA_INGESTED_EVENT,
-    METADATA_FILE,
-    PROXY_DIR,
-    PROXY_FILE,
-    STAGE_MESSAGES,
-    IngestionStage,
+    ApplyOutcome,
+    AuditAction,
+    JobErrorCodeEnum,
+    JobStatusEnum,
+    JobStepProcessingEnum,
+    LicenseType,
 )
-from app.database.session import get_session_factory
-from app.services.projects.projects import require_ingestion_allowed
-from app.services.storage.local import LocalStorage, get_storage
-from app.services.workflow.ingestion_pipeline import IngestionJob, ProgressCallback, run_ingestion
-from app.services.workflow.jobs import IngestionAlreadyRunningError
-from app.services.workflow.status import IngestionStatus, set_stage
+from app.core.exceptions import InvalidStateTransitionError, JobNotFoundError
+from app.database.models import AuditLog, Job
+from app.schemas.job import IngestionParams, JobUpdateEventSchema
+from app.schemas.project import ProjectCreate
+from app.services.projects.projects import LicenceNotConfirmedError, ProjectNotFoundError, create_project
+from app.services.workflow.jobs import (
+    IngestionAlreadyRunningError,
+    apply_job_event,
+    create_ingestion_job,
+    fail_job,
+    queue_job,
+)
 
-logger = logging.getLogger(__name__)
-
-
-class MediaIngestedEvent(BaseModel):
-    """Published when ingestion completes; triggers transcription and diarization (FR04, FR05)."""
-    event: str = MEDIA_INGESTED_EVENT
-    project_id: str
-    # Paths relative to the project directory, so consumers do not depend on the storage backend.
-    audio_path: str
-    proxy_path: str
-    metadata_path: str
-    occurred_at: datetime
+SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
+THREAD_WAIT_SECONDS = 0.5
+THREAD_TIMEOUT_SECONDS = 10
 
 
-EventPublisher = Callable[[MediaIngestedEvent], None]
+def make_project(db, licence=True):
+    return str(create_project(db, ProjectCreate(
+        title="Debate",
+        author="University of Aveiro",
+        speakers=["Ana"],
+        recording_date=date(2026, 10, 1),
+        license_type=LicenseType.CREATIVE_COMMONS,
+        copyright_notice="CC BY 4.0",
+        licence_confirmed=licence,
+        authorship_confirmed=True,
+    )).id)
 
 
-def log_event(event: MediaIngestedEvent) -> None:
-    """Placeholder publisher: logs the event until it is sent to RabbitMQ."""
-    logger.info(LOG_EVENT_PUBLISHED, event.event, event.model_dump(mode=JSON_DUMP_MODE))
+def new_job(db, project_id):
+    return create_ingestion_job(db, project_id, IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
 
 
-class JobDispatcher(ABC):
-    """What the API depends on; the RabbitMQ publisher will be another implementation."""
-
-    @abstractmethod
-    def dispatch(self, job: IngestionJob) -> IngestionStatus:
-        """Queue the job and return at once with the 'queued' status; never runs the pipeline inline."""
+def queued_job(db):
+    return queue_job(db, new_job(db, make_project(db)))
 
 
-# Run each ingestion job in a background thread so the API answers immediately.
-# Source: MS2 FR02 – Outputs (asynchronous ingestion, event triggers transcription); temporary until the RabbitMQ worker.
-class InProcessDispatcher(JobDispatcher):
-    """Temporary dispatcher for the prototype: one thread per job, at most one running job per project.
-
-    Running jobs live only in memory: they are lost if the process stops, and their status
-    stays at the last stage reached. A RabbitMQ worker with acknowledgements fixes both.
-    """
-
-    def __init__(
-        self,
-        storage: LocalStorage,
-        session_factory: sessionmaker[Session],
-        publish_event: EventPublisher = log_event,
-        on_progress: Optional[ProgressCallback] = None,
-    ):
-        self._storage = storage
-        self._session_factory = session_factory
-        self._publish_event = publish_event
-        self._on_progress = on_progress
-        self._lock = threading.Lock()
-        self._threads: Dict[str, threading.Thread] = {}
-
-    def dispatch(self, job: IngestionJob) -> IngestionStatus:
-        # Checked here too so the API can refuse at once (FR01); the pipeline checks again.
-        with self._session_factory() as db:
-            require_ingestion_allowed(db, job.project_id)
-
-        with self._lock:
-            if self.is_running(job.project_id):
-                raise IngestionAlreadyRunningError(
-                    ERROR_INGESTION_ALREADY_RUNNING.format(project_id=job.project_id)
-                )
-            status = set_stage(
-                self._storage, job.project_id, IngestionStage.QUEUED, STAGE_MESSAGES[IngestionStage.QUEUED]
-            )
-            thread = threading.Thread(
-                target=self._run,
-                args=(job,),
-                name=INGESTION_THREAD_NAME.format(project_id=job.project_id),
-                # Daemon: a stopping server does not wait for a 4 h job.
-                daemon=True,
-            )
-            self._threads[job.project_id] = thread
-            thread.start()
-        return status
-
-    def is_running(self, project_id: str) -> bool:
-        thread = self._threads.get(project_id)
-        return thread is not None and thread.is_alive()
-
-    def join(self, timeout: Optional[float] = None) -> None:
-        """Wait for the running jobs (used by tests)."""
-        for thread in list(self._threads.values()):
-            thread.join(timeout)
-
-    def _run(self, job: IngestionJob) -> None:
-        try:
-            status = run_ingestion(self._storage, job, self._on_progress)
-            if status.stage == IngestionStage.COMPLETED:
-                self._publish_event(_media_ingested(job.project_id))
-        except Exception:
-            # Nothing above the thread would see the error, so it is logged here.
-            logger.exception(LOG_JOB_CRASHED, job.project_id)
+def event_for(job, **kwargs):
+    kwargs.setdefault("status", JobStatusEnum.PROCESSING)
+    kwargs.setdefault("step", JobStepProcessingEnum.DOWNLOADING_MEDIA)
+    kwargs.setdefault("step_progress", 50)
+    return JobUpdateEventSchema(job_id=job.id, **kwargs)
 
 
-def _media_ingested(project_id: str) -> MediaIngestedEvent:
-    return MediaIngestedEvent(
-        project_id=project_id,
-        audio_path=PurePosixPath(AUDIO_DIR, AUDIO_FILE).as_posix(),
-        proxy_path=PurePosixPath(PROXY_DIR, PROXY_FILE).as_posix(),
-        metadata_path=METADATA_FILE,
-        occurred_at=datetime.now(timezone.utc),
+def test_a_new_job_is_pending_and_audited(db):
+    project_id = make_project(db)
+
+    job = new_job(db, project_id)
+
+    assert job.status == JobStatusEnum.PENDING
+    assert job.parameters["source_url"] == SAMPLE_URL
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == AuditAction.INGESTION_REQUESTED))
+    assert entry.details == {"job_id": str(job.id), "source": SAMPLE_URL}
+
+
+def test_a_job_needs_a_confirmed_licence(db):
+    project_id = make_project(db, licence=False)
+
+    with pytest.raises(LicenceNotConfirmedError):
+        new_job(db, project_id)
+    assert db.scalar(select(Job)) is None
+
+
+def test_a_job_needs_an_existing_project(db):
+    with pytest.raises(ProjectNotFoundError):
+        new_job(db, str(uuid.uuid4()))
+
+
+def test_a_second_active_ingestion_is_refused(db):
+    project_id = make_project(db)
+    new_job(db, project_id)
+
+    with pytest.raises(IngestionAlreadyRunningError):
+        new_job(db, project_id)
+
+
+def test_a_failed_ingestion_can_be_repeated(db):
+    project_id = make_project(db)
+    fail_job(db, new_job(db, project_id), JobErrorCodeEnum.INTERNAL_ERROR, "Broker unavailable")
+
+    assert new_job(db, project_id).status == JobStatusEnum.PENDING
+
+
+def test_a_job_cannot_be_queued_twice(db):
+    job = queued_job(db)
+
+    with pytest.raises(InvalidStateTransitionError):
+        queue_job(db, job)
+
+
+def test_fail_job_keeps_the_error_details(db):
+    job = fail_job(db, new_job(db, make_project(db)), JobErrorCodeEnum.INTERNAL_ERROR, "Broker unavailable")
+
+    assert (job.status, job.error_code, job.error_message) == (
+        JobStatusEnum.FAILED, JobErrorCodeEnum.INTERNAL_ERROR, "Broker unavailable"
     )
+    assert job.finished_at is not None
 
 
-@lru_cache
-def get_dispatcher() -> JobDispatcher:
-    """One dispatcher per process (FastAPI dependency); swap the class here for the RabbitMQ one."""
-    return InProcessDispatcher(get_storage(), get_session_factory())
+def test_a_worker_event_updates_the_stored_job(db):
+    job = queued_job(db)
+
+    result = apply_job_event(db, event_for(job))
+
+    db.expire_all()
+    stored = db.get(Job, job.id)
+    assert result.outcome == ApplyOutcome.APPLIED
+    assert (stored.status, stored.step, stored.step_progress) == (
+        JobStatusEnum.PROCESSING, JobStepProcessingEnum.DOWNLOADING_MEDIA, 50
+    )
+    assert stored.progress == 25
+    assert stored.started_at is not None
+
+
+def test_a_repeated_event_changes_nothing(db):
+    job = queued_job(db)
+    apply_job_event(db, event_for(job))
+
+    assert apply_job_event(db, event_for(job)).outcome == ApplyOutcome.IGNORED
+
+
+def test_a_completed_event_stores_the_output(db):
+    job = queued_job(db)
+    apply_job_event(db, event_for(job))
+
+    apply_job_event(db, event_for(job, status=JobStatusEnum.COMPLETED, step=None, step_progress=100, output={"a": 1}))
+
+    db.expire_all()
+    stored = db.get(Job, job.id)
+    assert (stored.status, stored.progress, stored.output) == (JobStatusEnum.COMPLETED, 100, {"a": 1})
+
+
+def test_an_event_of_an_unknown_job_is_refused(db):
+    event = JobUpdateEventSchema(job_id=uuid.uuid4(), status=JobStatusEnum.PROCESSING, step_progress=0)
+
+    with pytest.raises(JobNotFoundError):
+        apply_job_event(db, event)
+
+
+def test_events_of_the_same_job_wait_for_each_other(db, session_factory):
+    job = queued_job(db)
+    db.get(Job, job.id, with_for_update=True)  # holds the row lock
+
+    def apply_in_another_session():
+        with session_factory() as other:
+            apply_job_event(other, event_for(job))
+
+    thread = threading.Thread(target=apply_in_another_session)
+    thread.start()
+    thread.join(THREAD_WAIT_SECONDS)
+    assert thread.is_alive()
+
+    db.commit()
+    thread.join(THREAD_TIMEOUT_SECONDS)
+    assert not thread.is_alive()
+    db.expire_all()
+    assert db.get(Job, job.id).status == JobStatusEnum.PROCESSING

@@ -2,7 +2,7 @@ from fastapi import HTTPException, status
 
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectNotFoundError
 from app.services.video.uploads import UploadIncompleteError, UploadNotFoundError
-from app.services.workflow.dispatcher import IngestionAlreadyRunningError
+from app.services.workflow.jobs import IngestionAlreadyRunningError
 
 # Service exceptions the API turns into HTTP errors; anything else stays a 500.
 SERVICE_ERRORS = (
