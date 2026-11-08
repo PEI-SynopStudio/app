@@ -60,8 +60,10 @@ from app.core.config import (
     YTDLP_OUTPUT_CONTAINER,
     YTDLP_OUTPUT_TEMPLATE,
     YTDLP_REMUXER,
+    JobErrorCodeEnum,
     get_settings,
 )
+from app.core.exceptions import MediaProcessingError, MediaRejectedError
 from app.schemas.timecode import parse_time
 
 
@@ -122,7 +124,7 @@ def inspect_media(input_path: Path) -> MediaInfo:
         raise RuntimeError(ERROR_UNREADABLE_MEDIA.format(details=exc)) from exc
 
     if not media.streams_of(STREAM_TYPE_AUDIO):
-        raise ValueError(ERROR_NO_AUDIO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
 
     return media
 
@@ -140,19 +142,25 @@ def _display_aspect_ratio(width: int, height: int, sample_aspect_ratio: Optional
 def check_supported_formats(media: MediaInfo) -> None:
     """Raise ValueError when the container, the first video stream or the first audio stream is not allowed."""
     if not set(media.format_name.split(LIST_SEPARATOR)) & set(ALLOWED_CONTAINER_FORMATS):
-        raise ValueError(ERROR_UNSUPPORTED_CONTAINER.format(format_name=media.format_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_CONTAINER.format(format_name=media.format_name)
+        )
 
     videos, audios = media.streams_of(STREAM_TYPE_VIDEO), media.streams_of(STREAM_TYPE_AUDIO)
     if not videos:
-        raise ValueError(ERROR_NO_VIDEO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_NO_VIDEO_STREAM)
     if not audios:
-        raise ValueError(ERROR_NO_AUDIO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
 
     settings = get_settings()
     if videos[0].codec_name not in settings.allowed_video_codecs:
-        raise ValueError(ERROR_UNSUPPORTED_VIDEO_CODEC.format(codec=videos[0].codec_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_VIDEO_CODEC.format(codec=videos[0].codec_name)
+        )
     if audios[0].codec_name not in settings.allowed_audio_codecs:
-        raise ValueError(ERROR_UNSUPPORTED_AUDIO_CODEC.format(codec=audios[0].codec_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_AUDIO_CODEC.format(codec=audios[0].codec_name)
+        )
 
 
 # Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input) with PyAV.
@@ -164,7 +172,7 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
     try:
         with av.open(str(video_path)) as source:
             if not source.streams.audio:
-                raise ValueError(ERROR_NO_AUDIO_STREAM)
+                raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
             input_stream = source.streams.audio[0]
             resampler = av.AudioResampler(
                 format=AUDIO_SAMPLE_FORMAT, layout=AUDIO_LAYOUT, rate=AUDIO_SAMPLE_RATE
@@ -208,7 +216,7 @@ def check_audio_not_silent(wav_path: Path) -> None:
             if math.fsum(sample * sample for sample in samples) > threshold_rms**2 * len(samples):
                 return
 
-    raise ValueError(ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
+    raise MediaRejectedError(JobErrorCodeEnum.SILENT_AUDIO, ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
 
 
 # Generate a lightweight H.264/AAC proxy (max 720p, +faststart) with PyAV for web playback and scrubbing.
@@ -220,7 +228,7 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
     try:
         with av.open(str(video_path)) as source:
             if not source.streams.video:
-                raise ValueError(ERROR_NO_VIDEO_STREAM)
+                raise MediaRejectedError(JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_NO_VIDEO_STREAM)
             video_in = source.streams.video[0]
             audio_in = source.streams.audio[0] if source.streams.audio else None
             width, height = _proxy_size(video_in.codec_context.width, video_in.codec_context.height)
@@ -310,6 +318,6 @@ def download_youtube_video(
         with YoutubeDL(options) as ydl:
             ydl.download([url])
     except DownloadError as exc:
-        raise RuntimeError(ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
+        raise MediaProcessingError(JobErrorCodeEnum.SOURCE_UNAVAILABLE, ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
 
     return output_path.with_suffix(f".{YTDLP_OUTPUT_CONTAINER}")

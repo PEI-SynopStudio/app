@@ -5,6 +5,7 @@ import pytest
 
 from app.core.config import IngestionStage, SourceType, get_settings
 from app.services.storage.local import LocalStorage
+from app.services.video import sources as sources_module
 from app.services.video.metadata import get_technical_metadata
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
@@ -63,7 +64,7 @@ def test_silent_upload_fails_before_proxy(storage, project_id, make_sample):
     status, stages = run(storage, job)
 
     assert status.stage == IngestionStage.FAILED
-    assert status.error.code == "media_rejected"
+    assert status.error.code == "silent_audio"
     assert "silent" in status.error.message
     assert stages[-2:] == [IngestionStage.EXTRACTING_AUDIO, IngestionStage.FAILED]
     assert not storage.path(project_id, "proxy", "proxy.mp4").exists()
@@ -74,7 +75,7 @@ def test_unsupported_codec_fails(storage, project_id, make_sample):
 
     status, _ = run(storage, job)
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "media_rejected")
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "unsupported_format")
     assert "video codec" in status.error.message
 
 
@@ -87,6 +88,7 @@ def test_upload_longer_than_limit_fails(storage, project_id, make_sample, monkey
         get_settings.cache_clear()
 
     assert "exceeds the limit" in status.error.message
+    assert status.error.code == "duration_limit_exceeded"
 
 
 def test_corrupted_upload_fails_as_processing_error(storage, project_id, tmp_path):
@@ -95,7 +97,7 @@ def test_corrupted_upload_fails_as_processing_error(storage, project_id, tmp_pat
 
     status, _ = run(storage, stage_upload(storage, project_id, corrupted))
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "processing_failed")
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "corrupted_media")
 
 
 @pytest.mark.parametrize("staged_file", [None, "missing.mp4", "../project.json", "/etc/passwd", "."])
@@ -106,7 +108,7 @@ def test_invalid_staged_file_fails(storage, project_id, staged_file):
 
     status, _ = run(storage, job)
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "media_rejected")
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
 
 
 def test_upload_time_range_is_not_supported_yet(storage, project_id, make_sample):
@@ -161,7 +163,7 @@ def test_url_from_other_domain_fails(storage, project_id):
 
     status, _ = run(storage, job)
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "media_rejected")
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
     assert "domain not allowed" in status.error.message
 
 
@@ -176,7 +178,7 @@ def test_url_time_range_beyond_duration_fails(storage, project_id, monkeypatch):
 
     status, _ = run(storage, job)
 
-    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "media_rejected")
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "invalid_source")
     assert "Invalid time range" in status.error.message
 
 
@@ -190,3 +192,32 @@ def test_new_run_clears_previous_metadata(storage, project_id, make_sample):
 
     assert status.stage == IngestionStage.FAILED
     assert get_technical_metadata(storage, project_id) is None
+
+
+def test_video_without_audio_track_is_reported(storage, project_id, make_sample):
+    job = stage_upload(storage, project_id, make_sample(audio_codec=None))
+
+    status, _ = run(storage, job)
+
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "no_audio_track")
+
+
+def test_private_video_is_reported_as_unavailable(storage, project_id, monkeypatch):
+    class PrivateVideo:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"availability": "private", "duration": 600}
+
+    monkeypatch.setattr(sources_module, "YoutubeDL", PrivateVideo)
+
+    status, _ = run(storage, IngestionJob(project_id=project_id, source_type=SourceType.URL, source=SAMPLE_URL))
+
+    assert (status.stage, status.error.code) == (IngestionStage.FAILED, "source_unavailable")

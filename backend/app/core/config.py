@@ -97,12 +97,6 @@ STAGE_MESSAGES = {
 }
 
 
-class IngestionErrorCode(str, Enum):
-    MEDIA_REJECTED = "media_rejected"
-    PROCESSING_FAILED = "processing_failed"
-    INTERNAL_ERROR = "internal_error"
-
-
 # --- Ingestion pipeline: per-project file layout ---
 SOURCE_DIR = "source"
 AUDIO_DIR = "audio"

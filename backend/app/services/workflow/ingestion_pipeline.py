@@ -18,11 +18,12 @@ from app.core.config import (
     PROXY_FILE,
     SOURCE_DIR,
     STAGE_MESSAGES,
-    IngestionErrorCode,
     IngestionStage,
+    JobErrorCodeEnum,
     SourceType,
     get_settings,
 )
+from app.core.exceptions import MediaProcessingError, MediaRejectedError
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     check_audio_not_silent,
@@ -76,7 +77,7 @@ def run_ingestion(
     def advance(stage: IngestionStage) -> None:
         _notify(on_progress, set_stage(storage, project_id, stage, STAGE_MESSAGES[stage]))
 
-    def fail(code: IngestionErrorCode, message: str) -> IngestionStatus:
+    def fail(code: JobErrorCodeEnum, message: str) -> IngestionStatus:
         status = mark_failed(storage, project_id, code.value, message)
         _notify(on_progress, status)
         return status
@@ -92,7 +93,10 @@ def run_ingestion(
         check_supported_formats(media)
         limit = get_settings().max_duration_seconds
         if media.duration_seconds and media.duration_seconds > limit:
-            raise ValueError(ERROR_DURATION_EXCEEDED.format(duration=media.duration_seconds, limit=limit))
+            raise MediaRejectedError(
+                JobErrorCodeEnum.DURATION_LIMIT_EXCEEDED,
+                ERROR_DURATION_EXCEEDED.format(duration=media.duration_seconds, limit=limit),
+            )
 
         # Audio first: a silent recording is rejected before the proxy is encoded.
         advance(IngestionStage.EXTRACTING_AUDIO)
@@ -104,13 +108,15 @@ def run_ingestion(
 
         advance(IngestionStage.ANALYSING)
         save_technical_metadata(storage, project_id, build_technical_metadata(media, job.source_type, job.source))
+    except (MediaRejectedError, MediaProcessingError) as exc:
+        return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
-        return fail(IngestionErrorCode.MEDIA_REJECTED, str(exc))
+        return fail(JobErrorCodeEnum.INVALID_SOURCE, str(exc))
     except RuntimeError as exc:
-        return fail(IngestionErrorCode.PROCESSING_FAILED, str(exc))
+        return fail(JobErrorCodeEnum.CORRUPTED_MEDIA, str(exc))
     except Exception:
         logger.exception(LOG_INGESTION_FAILED, project_id)
-        fail(IngestionErrorCode.INTERNAL_ERROR, ERROR_INTERNAL)
+        fail(JobErrorCodeEnum.INTERNAL_ERROR, ERROR_INTERNAL)
         raise
 
     status = set_stage(storage, project_id, IngestionStage.COMPLETED, STAGE_MESSAGES[IngestionStage.COMPLETED])

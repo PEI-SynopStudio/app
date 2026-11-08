@@ -12,6 +12,7 @@ from app.core.config import (
     ERROR_JOB_ALREADY_TERMINAL,
     ERROR_JOB_NOT_FOUND,
     ERROR_STALE_JOB_ATTEMPT,
+    JobErrorCodeEnum,
 )
 
 
@@ -67,3 +68,19 @@ class InvalidStepError(DomainValidationError):
         self.job_type = job_type
         self.step = step
         super().__init__(message=ERROR_INVALID_STEP.format(step=step, job_type=job_type), code=ERROR_CODE_INVALID_STEP)
+
+
+class MediaRejectedError(ValueError):
+    """A business-rule rejection of a media source; carries the stable code shown to the user."""
+
+    def __init__(self, code: JobErrorCodeEnum, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class MediaProcessingError(RuntimeError):
+    """A failure while fetching or processing media; carries the stable code shown to the user."""
+
+    def __init__(self, code: JobErrorCodeEnum, message: str) -> None:
+        super().__init__(message)
+        self.code = code

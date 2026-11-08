@@ -203,7 +203,7 @@ def test_renamed_non_video_file_fails_inspection(live):
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
 
     status = client.get(f"/projects/{project_id}/ingestion").json()["status"]
-    assert (status["stage"], status["error"]["code"]) == ("ingestion_failed", "processing_failed")
+    assert (status["stage"], status["error"]["code"]) == ("ingestion_failed", "corrupted_media")
 
 
 def test_complete_can_be_retried_after_conflict(live, make_sample):

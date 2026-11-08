@@ -204,7 +204,7 @@ def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample)
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
     assert body["status"]["stage"] == "ingestion_failed"
-    assert body["status"]["error"]["code"] == "media_rejected"
+    assert body["status"]["error"]["code"] == "silent_audio"
     assert "silent" in body["status"]["error"]["message"]
     assert body["metadata"] is None
     assert events == []
