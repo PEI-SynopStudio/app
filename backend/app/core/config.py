@@ -242,6 +242,84 @@ ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
 ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
 
 
+# --- Asynchronous jobs (T3.13) ---
+class JobTypeEnum(str, Enum):
+    """The pipeline a job runs."""
+    INGESTION = "ingestion"
+    TRANSCRIPTION = "transcription"
+
+
+class JobStatusEnum(str, Enum):
+    """Global state machine of an asynchronous job."""
+    PENDING = "pending"  # persisted in the database
+    QUEUED = "queued"  # handed to the broker
+    PROCESSING = "processing"  # running in a worker
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class JobStepProcessingEnum(str, Enum):
+    """Granular steps reported to the interface."""
+    INITIALIZING = "initializing"  # creating the worker's temporary workspace
+    DOWNLOADING_MEDIA = "downloading_media"
+    INSPECTING_MEDIA = "inspecting_media"
+    EXTRACTING_AUDIO = "extracting_audio"
+    GENERATING_PROXY = "generating_proxy"  # proxy video and keyframes
+    TRANSCRIBING = "transcribing"
+    DIARIZING = "diarizing"  # who spoke when
+    PERSISTING_RESULTS = "persisting_results"  # sending artefacts to storage and the database
+    CLEANING_UP = "cleaning_up"  # removing temporary files
+    FINISHED = "finished"
+
+
+class JobErrorCodeEnum(str, Enum):
+    """Stable error codes; the UI maps them to messages."""
+    INVALID_SOURCE = "invalid_source"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    DURATION_LIMIT_EXCEEDED = "duration_limit_exceeded"
+    CORRUPTED_MEDIA = "corrupted_media"
+    NO_AUDIO_TRACK = "no_audio_track"
+    INTERNAL_ERROR = "internal_error"
+    TIMEOUT = "timeout"
+
+
+class AcousticProfileEnum(str, Enum):
+    """Acoustic context profile of a recording (FR04)."""
+    LECTURE = "lecture"
+    DEBATE = "debate"
+    CONFERENCE = "conference"
+    INTERVIEW = "interview"
+
+
+ERROR_CODE_APP = "app_error"
+ERROR_CODE_JOB_NOT_FOUND = "job_not_found"
+ERROR_CODE_INVALID_TRANSITION = "invalid_state_transition"
+ERROR_CODE_JOB_TERMINAL = "job_already_terminal"
+ERROR_CODE_STALE_ATTEMPT = "stale_job_attempt"
+ERROR_CODE_INVALID_STEP = "invalid_step"
+ERROR_JOB_NOT_FOUND = "Job not found"
+ERROR_INVALID_TRANSITION = "Invalid transition: {current} -> {target}"
+ERROR_JOB_ALREADY_TERMINAL = "Job is already in a final status ({status})."
+ERROR_STALE_JOB_ATTEMPT = "Event from a past attempt ignored ({event_attempt} < {current_attempt})."
+ERROR_INVALID_STEP = "Step '{step}' does not belong to pipeline '{job_type}'."
+ERROR_JOB_SOURCE_REQUIRED = "Provide exactly one of source_url or media_id."
+ERROR_JOB_TIME_ORDER = "time_end must be after time_start."
+ERROR_EVENT_CODE_REQUIRED = "error_code is required when status=failed."
+ERROR_EVENT_CODE_NOT_ALLOWED = "error_code is only allowed when status=failed."
+ERROR_TIMECODE_SECONDS = "Seconds must be below 60: {value}"
+ERROR_TIMECODE_MINUTES = "Minutes must be below 60: {value}"
+TIMECODE_SEPARATOR = ":"
+TIMECODE_PART_PATTERN = r"\d+(?:\.\d{1,3})?"
+TIMECODE_PART_COUNTS = (1, 2, 3)
+TIMECODE_HMS_PARTS = 3
+SEXAGESIMAL_BASE = 60
+LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
+PROGRESS_MIN = 0.0
+PROGRESS_MAX = 100.0
+FIRST_JOB_ATTEMPT = 1
+
+
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())
