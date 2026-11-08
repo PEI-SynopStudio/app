@@ -16,6 +16,7 @@ DEFAULT_ALLOWED_AUDIO_CODECS = "aac,mp3,opus,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f
 DEFAULT_MAX_DURATION_SECONDS = 4 * 3600
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024**3
 DEFAULT_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024**2
+DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
@@ -125,7 +126,6 @@ LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
 
 # --- Chunked upload (FR02 step 1) ---
 UPLOADS_DIR = "uploads"
-UPLOAD_SESSION_FILE = "session.json"
 UPLOAD_CHUNKS_DIR = "chunks"
 CHUNK_FILE_FORMAT = "{index:06d}"
 EXTENSION_SEPARATOR = "."
@@ -434,6 +434,8 @@ class AuditAction(str, Enum):
 # Project fields copied to the audit log, which outlives the project (MS3 §1.4.3).
 AUDIT_PROJECT_FIELDS = {"title"}
 AUDIT_LICENCE_FIELDS = {"author", "license_type", "copyright_notice", "licence_confirmed", "authorship_confirmed"}
+AUDIT_DETAIL_FILE_NAME = "file_name"
+AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
@@ -452,6 +454,7 @@ class Settings:
     max_duration_seconds: int
     max_upload_bytes: int
     upload_chunk_size_bytes: int
+    upload_session_ttl_seconds: int
     log_level: str
     whisper_model: str
     default_language: str
@@ -472,6 +475,7 @@ def get_settings() -> Settings:
         max_duration_seconds=int(os.environ.get("MAX_DURATION_SECONDS", DEFAULT_MAX_DURATION_SECONDS)),
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
         upload_chunk_size_bytes=int(os.environ.get("UPLOAD_CHUNK_SIZE_BYTES", DEFAULT_UPLOAD_CHUNK_SIZE_BYTES)),
+        upload_session_ttl_seconds=int(os.environ.get("UPLOAD_SESSION_TTL_SECONDS", DEFAULT_UPLOAD_SESSION_TTL_SECONDS)),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),

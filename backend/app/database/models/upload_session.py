@@ -34,6 +34,5 @@ class UploadSession(Base):
     total_chunks: Mapped[int]
     # Server-chosen name of the assembled file in the project's source directory.
     staged_file: Mapped[str] = mapped_column(String(FILE_NAME_MAX_LENGTH))
-    assembled: Mapped[bool] = mapped_column(default=False)
     expires_at: Mapped[datetime]
     created_at: Mapped[datetime] = mapped_column(default=utc_now)

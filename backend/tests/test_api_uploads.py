@@ -2,11 +2,15 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.core.config import get_settings
+from app.core.config import AuditAction, IngestionStage, MediaAssetStatus, get_settings
+from app.database.base import utc_now
+from app.database.models import AuditLog, MediaAsset, UploadSession
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.workflow.dispatcher import InProcessDispatcher, get_dispatcher
+from app.services.workflow.status import set_stage
 
 CHUNK_SIZE = 4096
 JOIN_TIMEOUT_SECONDS = 60
@@ -213,3 +217,43 @@ def test_complete_can_be_retried_after_conflict(live, make_sample):
     retried = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
 
     assert (refused.status_code, retried.status_code) == (409, 202)
+
+
+def test_start_upload_registers_the_asset_and_the_audit_entry(live, db):
+    client, _, _ = live
+    project_id = new_project(client)
+
+    upload_id = start(client, project_id, file_name="Debate.mp4").json()["upload_id"]
+
+    asset = db.scalar(select(MediaAsset))
+    assert (str(asset.project_id), asset.file_name, asset.status) == (
+        project_id, "Debate.mp4", MediaAssetStatus.UPLOADING
+    )
+    assert db.get(UploadSession, uuid.UUID(upload_id)).expires_at > utc_now()
+    actions = db.scalars(select(AuditLog.action).where(AuditLog.project_id == uuid.UUID(project_id))).all()
+    assert AuditAction.UPLOAD_STARTED in actions
+
+
+def test_upload_of_another_project_is_not_found(live):
+    client, _, _ = live
+    upload_id = start(client, new_project(client)).json()["upload_id"]
+
+    assert client.get(f"/projects/{new_project(client)}/uploads/{upload_id}").status_code == 404
+
+
+def test_complete_leaves_the_assembly_to_the_job(live, storage, db, monkeypatch):
+    """Endpoints never block (FR02): a multi-GB file is not assembled inside the request."""
+    client, dispatcher, _ = live
+    project_id = new_project(client)
+    upload_id = upload_all(client, project_id, b"x" * 10_000)
+    monkeypatch.setattr(
+        dispatcher, "dispatch", lambda job: set_stage(storage, job.project_id, IngestionStage.QUEUED)
+    )
+
+    response = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
+
+    assert response.status_code == 202
+    assert not storage.path(project_id, "source", f"{upload_id}.mp4").exists()
+    assert (storage.project_dir(project_id) / "uploads" / upload_id / "chunks").is_dir()
+    assert client.get(f"/projects/{project_id}/uploads/{upload_id}").status_code == 404
+    assert db.scalar(select(MediaAsset)).status == MediaAssetStatus.PROCESSING

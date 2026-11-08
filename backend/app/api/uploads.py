@@ -17,14 +17,14 @@ from app.core.config import (
     UPLOADS_ROUTE,
     SourceType,
 )
+from app.database.models import UploadSession
 from app.database.session import get_db
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.uploads import (
-    UploadSession,
-    assemble_upload,
-    discard_upload,
+    close_upload,
     get_upload,
     missing_chunks,
+    require_all_chunks,
     save_chunk,
     start_upload,
 )
@@ -53,7 +53,7 @@ class UploadProgress(BaseModel):
 
 def _progress(storage: LocalStorage, session: UploadSession) -> UploadProgress:
     return UploadProgress(
-        upload_id=session.upload_id,
+        upload_id=str(session.id),
         file_name=session.file_name,
         size_bytes=session.size_bytes,
         chunk_size=session.chunk_size,
@@ -72,16 +72,21 @@ def create_upload(
     storage: LocalStorage = Depends(get_storage),
 ):
     try:
-        session = start_upload(db, storage, project_id, body.file_name, body.size_bytes, body.content_type)
+        session = start_upload(db, project_id, body.file_name, body.size_bytes, body.content_type)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
     return _progress(storage, session)
 
 
 @router.get(UPLOAD_ROUTE, response_model=UploadProgress)
-def read_upload(project_id: str, upload_id: str, storage: LocalStorage = Depends(get_storage)):
+def read_upload(
+    project_id: str,
+    upload_id: str,
+    db: Session = Depends(get_db),
+    storage: LocalStorage = Depends(get_storage),
+):
     try:
-        return _progress(storage, get_upload(storage, project_id, upload_id))
+        return _progress(storage, get_upload(db, project_id, upload_id))
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 
@@ -94,33 +99,40 @@ def upload_chunk(
     upload_id: str,
     index: int,
     chunk: UploadFile = File(...),
+    db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
 ):
     try:
-        save_chunk(storage, get_upload(storage, project_id, upload_id), index, chunk.file)
+        session = get_upload(db, project_id, upload_id)
+        # Free the database connection: storing a chunk can take a while.
+        db.close()
+        save_chunk(storage, session, index, chunk.file)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 
 
-# Assemble the chunks into the project's source directory and queue the ingestion job.
-# Source: MS2 FR02 – Step 2 (assembled in staging) and Outputs (asynchronous ingestion).
+# Check that every chunk arrived and queue the job, which assembles them outside the request.
+# Source: MS2 FR02 – Step 2 and Outputs (asynchronous ingestion, no UI blocking).
 @router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=IngestionStatus)
 def complete_upload(
     project_id: str,
     upload_id: str,
+    db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     dispatcher: JobDispatcher = Depends(get_dispatcher),
 ):
-    """If the job is refused (e.g. 409), the assembled file and session are kept, so this call can be retried."""
+    """If the job is refused (e.g. 409), the chunks and the session are kept, so this call can be retried."""
     try:
-        session = assemble_upload(storage, get_upload(storage, project_id, upload_id))
+        session = get_upload(db, project_id, upload_id)
+        require_all_chunks(storage, session)
         queued = dispatcher.dispatch(IngestionJob(
             project_id=project_id,
             source_type=SourceType.UPLOAD,
             source=session.file_name,
             staged_file=session.staged_file,
+            upload_id=str(session.id),
         ))
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
-    discard_upload(storage, session)
+    close_upload(db, session)
     return queued

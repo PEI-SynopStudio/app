@@ -38,6 +38,7 @@ from app.services.video.metadata import (
     save_technical_metadata,
 )
 from app.services.video.sources import probe_remote_video, validate_time_range
+from app.services.video.uploads import assemble_chunks
 from app.services.workflow.status import IngestionStatus, mark_failed, set_stage
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ class IngestionJob(BaseModel):
     source: str
     # Uploads only: name of the assembled file inside the project's source directory.
     staged_file: Optional[str] = None
+    # Uploads only: the session whose chunks must be assembled into staged_file.
+    upload_id: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
 
@@ -137,6 +140,8 @@ def _fetch_source(storage: LocalStorage, job: IngestionJob, advance: Callable[[I
     # Only a file directly inside the project's source directory is accepted (no "..", "/" or symlinks out).
     if source_path.resolve().parent != source_dir.resolve():
         raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=job.staged_file))
+    if job.upload_id is not None:
+        assemble_chunks(storage, job.project_id, job.upload_id, job.staged_file)
     if not source_path.is_file():
         raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=job.staged_file))
     return source_path
