@@ -1,5 +1,6 @@
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import (
@@ -7,13 +8,16 @@ from app.core.config import (
     AUDIT_PROJECT_FIELDS,
     ERROR_INVALID_PROJECT_ID,
     ERROR_LICENCE_NOT_CONFIRMED,
+    ERROR_PROJECT_BUSY,
     ERROR_PROJECT_NOT_FOUND,
+    JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     AuditAction,
 )
-from app.database.models import Project
+from app.database.models import Job, Project
 from app.schemas.project import ProjectCreate
 from app.services.audit.audit import record_audit
+from app.services.storage.local import LocalStorage
 
 
 class ProjectNotFoundError(LookupError):
@@ -21,6 +25,10 @@ class ProjectNotFoundError(LookupError):
 
 
 class LicenceNotConfirmedError(PermissionError):
+    pass
+
+
+class ProjectBusyError(Exception):
     pass
 
 
@@ -57,6 +65,22 @@ def require_ingestion_allowed(db: Session, project_id: str) -> Project:
     if not (project.licence_confirmed and project.authorship_confirmed):
         raise LicenceNotConfirmedError(ERROR_LICENCE_NOT_CONFIRMED)
     return project
+
+
+# Delete a project with its videos, jobs and uploads; only the audit records remain.
+# Source: US34; MS3 §1.4.3 (project deletion, licence and editorial records kept for 12 months); FR18.
+def delete_project(db: Session, storage: LocalStorage, project_id: str) -> None:
+    """Refused while a job is active, because its worker would keep writing files for the project."""
+    project = get_project(db, project_id)
+    active = select(Job.id).where(Job.project_id == project.id, Job.status.in_(JOB_ACTIVE_STATUSES)).limit(1)
+    if db.scalar(active) is not None:
+        raise ProjectBusyError(ERROR_PROJECT_BUSY.format(project_id=project_id))
+    record_audit(
+        db, project.id, AuditAction.PROJECT_DELETED, {field: getattr(project, field) for field in AUDIT_PROJECT_FIELDS}
+    )
+    db.delete(project)
+    db.commit()
+    storage.delete_project(project_id)
 
 
 def _parse_project_id(project_id: str) -> uuid.UUID:

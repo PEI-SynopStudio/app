@@ -33,6 +33,7 @@ TMP_SUFFIX = ".tmp"
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
 ERROR_PROJECT_NOT_FOUND = "Project not found: {project_id}"
+ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while an ingestion is running."
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )

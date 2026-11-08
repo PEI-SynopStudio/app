@@ -1,3 +1,4 @@
+import shutil
 import uuid
 from pathlib import Path
 
@@ -31,6 +32,10 @@ class LocalStorage:
     def delete(self, project_id: str, key: str) -> None:
         """Remove a file of the project if it exists; `key` is relative to the project directory."""
         (self.project_dir(project_id) / key).unlink(missing_ok=True)
+
+    def delete_project(self, project_id: str) -> None:
+        """Remove every file of the project (US34)."""
+        shutil.rmtree(self.project_dir(project_id), ignore_errors=True)
 
 
 def get_storage() -> LocalStorage:
