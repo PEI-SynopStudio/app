@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
@@ -15,6 +16,7 @@ from app.core.config import (
     URL_MAX_LENGTH,
     SourceType,
 )
+from app.database.session import get_db
 from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.metadata import TechnicalMetadata, get_technical_metadata
@@ -65,9 +67,11 @@ def ingest_url(
 # Return the current ingestion stage (or the failure details) and, once saved, the technical metadata.
 # Source: MS2 FR02 – Outputs (progress) and Step 3 ('Ingestion Failed' with details).
 @router.get(INGESTION_STATUS_ROUTE, response_model=IngestionOverview)
-def read_ingestion(project_id: str, storage: LocalStorage = Depends(get_storage)):
+def read_ingestion(
+    project_id: str, db: Session = Depends(get_db), storage: LocalStorage = Depends(get_storage)
+):
     try:
-        get_project(storage, project_id)
+        get_project(db, project_id)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 

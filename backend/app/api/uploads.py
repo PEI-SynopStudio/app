@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
@@ -16,6 +17,7 @@ from app.core.config import (
     UPLOADS_ROUTE,
     SourceType,
 )
+from app.database.session import get_db
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.uploads import (
     UploadSession,
@@ -63,9 +65,14 @@ def _progress(storage: LocalStorage, session: UploadSession) -> UploadProgress:
 # Open a chunked upload after checking the licence and the declared extension, MIME type and size.
 # Source: MS2 FR02 – Step 1 (direct upload, chunked multipart upload for multi-GB files).
 @router.post(UPLOADS_ROUTE, status_code=status.HTTP_201_CREATED, response_model=UploadProgress)
-def create_upload(project_id: str, body: UploadStart, storage: LocalStorage = Depends(get_storage)):
+def create_upload(
+    project_id: str,
+    body: UploadStart,
+    db: Session = Depends(get_db),
+    storage: LocalStorage = Depends(get_storage),
+):
     try:
-        session = start_upload(storage, project_id, body.file_name, body.size_bytes, body.content_type)
+        session = start_upload(db, storage, project_id, body.file_name, body.size_bytes, body.content_type)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
     return _progress(storage, session)

@@ -34,9 +34,6 @@ class LocalStorage:
             raise ValueError(ERROR_INVALID_PROJECT_ID.format(project_id=project_id))
         return self.root / PROJECTS_DIR / normalized
 
-    def project_exists(self, project_id: str) -> bool:
-        return self.project_dir(project_id).is_dir()
-
     def path(self, project_id: str, *parts: str) -> Path:
         """Return a path inside the project directory, creating its parent directories."""
         target = self.project_dir(project_id).joinpath(*parts)

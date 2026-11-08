@@ -19,6 +19,15 @@ from app.services.workflow.status import set_stage
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 JOIN_TIMEOUT_SECONDS = 60
+PROJECT_BODY = {
+    "title": "Debate",
+    "author": "University of Aveiro",
+    "speakers": ["Ana"],
+    "recording_date": "2026-10-01",
+    "license_type": "creative_commons",
+    "copyright_notice": "CC BY 4.0",
+    "authorship_confirmed": True,
+}
 
 
 class RecordingDispatcher(JobDispatcher):
@@ -45,7 +54,7 @@ def dispatcher(storage):
 
 
 @pytest.fixture
-def client(storage, dispatcher):
+def client(storage, dispatcher, db_override):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app)
@@ -53,10 +62,10 @@ def client(storage, dispatcher):
 
 
 @pytest.fixture
-def live(storage):
+def live(storage, db_override, session_factory):
     """Client wired to the real InProcessDispatcher; yields (client, dispatcher, published events)."""
     events = []
-    dispatcher = InProcessDispatcher(storage, publish_event=events.append)
+    dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
@@ -80,9 +89,7 @@ def fake_youtube(monkeypatch):
 
 
 def new_project(client, licence=True):
-    response = client.post(
-        "/projects", json={"title": "Debate", "licence_confirmed": licence, "authorship_confirmed": True}
-    )
+    response = client.post("/projects", json={**PROJECT_BODY, "licence_confirmed": licence})
     return response.json()["id"]
 
 

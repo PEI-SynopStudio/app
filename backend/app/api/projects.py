@@ -1,37 +1,25 @@
-# Temporary project endpoints until FR01 is implemented.
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.orm import Session
 
-from app.core.config import (
-    PROJECT_ID_ROUTE,
-    PROJECT_TITLE_MAX_LENGTH,
-    PROJECT_TITLE_MIN_LENGTH,
-    PROJECTS_ROUTE_PREFIX,
-    PROJECTS_ROUTE_TAG,
-    ROUTE_ROOT,
-)
-from app.services.projects.projects import Project, ProjectNotFoundError, create_project, get_project
-from app.services.storage.local import LocalStorage, get_storage
+from app.api.errors import SERVICE_ERRORS, http_error
+from app.core.config import PROJECT_ID_ROUTE, PROJECTS_ROUTE_PREFIX, PROJECTS_ROUTE_TAG, ROUTE_ROOT
+from app.database.session import get_db
+from app.schemas.project import ProjectCreate, ProjectResponse
+from app.services.projects.projects import create_project, get_project
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[PROJECTS_ROUTE_TAG])
 
 
-class ProjectCreate(BaseModel):
-    title: str = Field(min_length=PROJECT_TITLE_MIN_LENGTH, max_length=PROJECT_TITLE_MAX_LENGTH)
-    licence_confirmed: bool
-    authorship_confirmed: bool
+# Create a project with the metadata required before any processing.
+# Source: MS2 FR01 – Inputs and Business Rules.
+@router.post(ROUTE_ROOT, status_code=status.HTTP_201_CREATED, response_model=ProjectResponse)
+def create(body: ProjectCreate, db: Session = Depends(get_db)):
+    return create_project(db, body)
 
 
-@router.post(ROUTE_ROOT, status_code=status.HTTP_201_CREATED, response_model=Project)
-def create(body: ProjectCreate, storage: LocalStorage = Depends(get_storage)):
-    return create_project(storage, body.title, body.licence_confirmed, body.authorship_confirmed)
-
-
-@router.get(PROJECT_ID_ROUTE, response_model=Project)
-def read(project_id: str, storage: LocalStorage = Depends(get_storage)):
+@router.get(PROJECT_ID_ROUTE, response_model=ProjectResponse)
+def read(project_id: str, db: Session = Depends(get_db)):
     try:
-        return get_project(storage, project_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return get_project(db, project_id)
+    except SERVICE_ERRORS as exc:
+        raise http_error(exc) from exc

@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, List, Optional
 
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.config import (
     ALLOWED_UPLOAD_MIME_TYPES,
@@ -63,10 +64,15 @@ class UploadIncompleteError(Exception):
 # Validate the declared file (extension, MIME type, size) and open an upload session with a fixed chunk size.
 # Source: MS2 FR02 – Step 1 (direct upload, extension and MIME check, chunked multipart upload for multi-GB files).
 def start_upload(
-    storage: LocalStorage, project_id: str, file_name: str, size_bytes: int, content_type: Optional[str]
+    db: Session,
+    storage: LocalStorage,
+    project_id: str,
+    file_name: str,
+    size_bytes: int,
+    content_type: Optional[str],
 ) -> UploadSession:
     """Refuse at once when the licence is not confirmed (FR01) or the file is not acceptable."""
-    require_ingestion_allowed(storage, project_id)
+    require_ingestion_allowed(db, project_id)
     extension = _check_declared_file(file_name, size_bytes, content_type)
 
     upload_id = str(uuid.uuid4())

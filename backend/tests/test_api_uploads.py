@@ -10,6 +10,15 @@ from app.services.workflow.dispatcher import InProcessDispatcher, get_dispatcher
 
 CHUNK_SIZE = 4096
 JOIN_TIMEOUT_SECONDS = 60
+PROJECT_BODY = {
+    "title": "Debate",
+    "author": "University of Aveiro",
+    "speakers": ["Ana"],
+    "recording_date": "2026-10-01",
+    "license_type": "creative_commons",
+    "copyright_notice": "CC BY 4.0",
+    "authorship_confirmed": True,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -26,10 +35,10 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def live(storage):
+def live(storage, db_override, session_factory):
     """Client wired to the real dispatcher; yields (client, dispatcher, published events)."""
     events = []
-    dispatcher = InProcessDispatcher(storage, publish_event=events.append)
+    dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
@@ -38,9 +47,7 @@ def live(storage):
 
 
 def new_project(client, licence=True):
-    response = client.post(
-        "/projects", json={"title": "Lecture", "licence_confirmed": licence, "authorship_confirmed": True}
-    )
+    response = client.post("/projects", json={**PROJECT_BODY, "licence_confirmed": licence})
     return response.json()["id"]
 
 

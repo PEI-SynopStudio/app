@@ -1,10 +1,12 @@
 import shutil
 import threading
 import uuid
+from datetime import date
 
 import pytest
 
-from app.core.config import IngestionStage, SourceType
+from app.core.config import IngestionStage, LicenseType, SourceType
+from app.schemas.project import ProjectCreate
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectNotFoundError, create_project
 from app.services.storage.local import LocalStorage
 from app.services.workflow import dispatcher as dispatcher_module
@@ -15,14 +17,27 @@ from app.services.workflow.status import get_status, set_stage
 JOIN_TIMEOUT_SECONDS = 60
 
 
+def make_project(db, authorship=True):
+    return str(create_project(db, ProjectCreate(
+        title="Debate",
+        author="University of Aveiro",
+        speakers=["Ana"],
+        recording_date=date(2026, 10, 1),
+        license_type=LicenseType.CREATIVE_COMMONS,
+        copyright_notice="CC BY 4.0",
+        licence_confirmed=True,
+        authorship_confirmed=authorship,
+    )).id)
+
+
 @pytest.fixture
 def storage(tmp_path):
     return LocalStorage(tmp_path / "media")
 
 
 @pytest.fixture
-def project_id(storage):
-    return create_project(storage, "Debate", licence_confirmed=True, authorship_confirmed=True).id
+def project_id(db):
+    return make_project(db)
 
 
 @pytest.fixture
@@ -31,8 +46,8 @@ def events():
 
 
 @pytest.fixture
-def dispatcher(storage, events):
-    instance = InProcessDispatcher(storage, publish_event=events.append)
+def dispatcher(storage, events, session_factory):
+    instance = InProcessDispatcher(storage, session_factory, publish_event=events.append)
     yield instance
     instance.join(JOIN_TIMEOUT_SECONDS)
 
@@ -104,8 +119,8 @@ def test_failed_ingestion_publishes_no_event(dispatcher, storage, project_id, ev
     assert events == []
 
 
-def test_dispatch_refuses_without_licence(dispatcher, storage):
-    project_id = create_project(storage, "Debate", licence_confirmed=True, authorship_confirmed=False).id
+def test_dispatch_refuses_without_licence(dispatcher, storage, db):
+    project_id = make_project(db, authorship=False)
 
     with pytest.raises(LicenceNotConfirmedError):
         dispatcher.dispatch(IngestionJob(project_id=project_id, source_type=SourceType.URL, source="x"))

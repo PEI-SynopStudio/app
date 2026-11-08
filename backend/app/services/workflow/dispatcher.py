@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from typing import Callable, Dict, Optional
 
 from pydantic import BaseModel
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import (
     AUDIO_DIR,
@@ -23,6 +24,7 @@ from app.core.config import (
     STAGE_MESSAGES,
     IngestionStage,
 )
+from app.database.session import get_session_factory
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.workflow.ingestion_pipeline import IngestionJob, ProgressCallback, run_ingestion
@@ -74,10 +76,12 @@ class InProcessDispatcher(JobDispatcher):
     def __init__(
         self,
         storage: LocalStorage,
+        session_factory: sessionmaker[Session],
         publish_event: EventPublisher = log_event,
         on_progress: Optional[ProgressCallback] = None,
     ):
         self._storage = storage
+        self._session_factory = session_factory
         self._publish_event = publish_event
         self._on_progress = on_progress
         self._lock = threading.Lock()
@@ -85,7 +89,8 @@ class InProcessDispatcher(JobDispatcher):
 
     def dispatch(self, job: IngestionJob) -> IngestionStatus:
         # Checked here too so the API can refuse at once (FR01); the pipeline checks again.
-        require_ingestion_allowed(self._storage, job.project_id)
+        with self._session_factory() as db:
+            require_ingestion_allowed(db, job.project_id)
 
         with self._lock:
             if self.is_running(job.project_id):
@@ -138,4 +143,4 @@ def _media_ingested(project_id: str) -> MediaIngestedEvent:
 @lru_cache
 def get_dispatcher() -> JobDispatcher:
     """One dispatcher per process (FastAPI dependency); swap the class here for the RabbitMQ one."""
-    return InProcessDispatcher(get_storage())
+    return InProcessDispatcher(get_storage(), get_session_factory())

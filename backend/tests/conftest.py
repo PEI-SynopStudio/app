@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 
 # Add the backend root to the Python path so the 'app' module can be found
 backend_root = Path(__file__).resolve().parent.parent
@@ -112,15 +112,33 @@ def database_url():
 
 
 @pytest.fixture
-def db(database_url):
-    """A session on empty tables, recreated for each test."""
+def session_factory(database_url):
+    """Sessions on empty tables, recreated for each test."""
     from app.database import models  # noqa: F401 - registers the tables
     from app.database.base import Base
 
     engine = create_engine(database_url)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-    with Session(engine, expire_on_commit=False) as session:
-        yield session
+    yield sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+@pytest.fixture
+def db(session_factory):
+    with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+def db_override(session_factory):
+    """Point the API's get_db dependency to the test database; the client fixtures clear it."""
+    from app.database.session import get_db
+    from app.main import app
+
+    def override():
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override
