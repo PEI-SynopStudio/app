@@ -61,14 +61,21 @@ def submit_url_ingestion(
 # Queue the ingestion of a fully received upload and close its session.
 # Source: MS2 FR02 – Step 2 and Outputs (asynchronous ingestion, no UI blocking).
 def submit_upload_ingestion(
-    db: Session, storage: LocalStorage, dispatcher: JobDispatcher, session: UploadSession
+    db: Session,
+    storage: LocalStorage,
+    dispatcher: JobDispatcher,
+    session: UploadSession,
+    time_start: Optional[str] = None,
+    time_end: Optional[str] = None,
 ) -> Job:
     """If the job is refused (e.g. 409), nothing changes, so the upload can be completed again later."""
-    params = IngestionParams(media_id=session.media_asset_id)
+    params = IngestionParams(media_id=session.media_asset_id, time_start=time_start, time_end=time_end)
     job = create_ingestion_job(
         db, str(session.project_id), params, session.file_name, media_asset_id=session.media_asset_id
     )
-    db.get(MediaAsset, session.media_asset_id).source_key = _source_key(session.staged_file)
+    asset = db.get(MediaAsset, session.media_asset_id)
+    asset.source_key = _source_key(session.staged_file)
+    asset.time_start_seconds, asset.time_end_seconds = _seconds(time_start), _seconds(time_end)
     _replace_previous_assets(db, storage, job)
     request = JobRequestMessage(
         job_id=job.id,
@@ -95,8 +102,10 @@ def _replace_previous_assets(db: Session, storage: LocalStorage, job: Job) -> No
     )
     keys: List[str] = []
     for asset in db.scalars(query).all():
-        track_key = asset.audio_track.storage_key if asset.audio_track is not None else None
-        keys.extend(key for key in (asset.source_key, asset.proxy_key, track_key) if key is not None)
+        candidates = [asset.source_key, asset.proxy_key, asset.keyframes_key]
+        if asset.audio_track is not None:
+            candidates += [asset.audio_track.storage_key, asset.audio_track.waveform_key]
+        keys.extend(key for key in candidates if key is not None)
         db.delete(asset)
     db.commit()
     for key in keys:

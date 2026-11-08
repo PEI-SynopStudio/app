@@ -1,3 +1,4 @@
+import math
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
@@ -11,6 +12,7 @@ from app.core.config import (
     FILE_NAME_MIN_LENGTH,
     INGESTION_ROUTE_TAG,
     PROJECTS_ROUTE_PREFIX,
+    TIMECODE_MAX_LENGTH,
     UPLOAD_CHUNK_ROUTE,
     UPLOAD_COMPLETE_ROUTE,
     UPLOAD_ROUTE,
@@ -20,6 +22,7 @@ from app.database.models import UploadSession
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.video.sources import validate_time_range
 from app.services.video.uploads import (
     get_upload,
     missing_chunks,
@@ -37,6 +40,11 @@ class UploadStart(BaseModel):
     file_name: str = Field(min_length=FILE_NAME_MIN_LENGTH, max_length=FILE_NAME_MAX_LENGTH)
     size_bytes: int
     content_type: Optional[str] = Field(default=None, max_length=CONTENT_TYPE_MAX_LENGTH)
+
+
+class UploadCompletion(BaseModel):
+    start_time: Optional[str] = Field(default=None, max_length=TIMECODE_MAX_LENGTH)
+    end_time: Optional[str] = Field(default=None, max_length=TIMECODE_MAX_LENGTH)
 
 
 class UploadProgress(BaseModel):
@@ -109,20 +117,24 @@ def upload_chunk(
         raise http_error(exc) from exc
 
 
-# Check that every chunk arrived and queue the job, which assembles them outside the request.
-# Source: MS2 FR02 – Step 2 and Outputs (asynchronous ingestion, no UI blocking).
+# Check that every chunk arrived and queue the job, which assembles them and applies the optional time range.
+# Source: MS2 FR02 – Inputs (optional start/end timecodes), Step 2 and Outputs (asynchronous ingestion, no UI blocking).
 @router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
 def complete_upload(
     project_id: str,
     upload_id: str,
+    body: Optional[UploadCompletion] = None,
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     dispatcher: JobDispatcher = Depends(get_dispatcher),
 ):
     """If the job is refused (e.g. 409), the chunks and the session are kept, so this call can be retried."""
+    time_range = body or UploadCompletion()
     try:
+        # Format and order only; the video duration is known after the inspection, inside the job.
+        validate_time_range(time_range.start_time, time_range.end_time, math.inf)
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(storage, session)
-        return submit_upload_ingestion(db, storage, dispatcher, session)
+        return submit_upload_ingestion(db, storage, dispatcher, session, time_range.start_time, time_range.end_time)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc

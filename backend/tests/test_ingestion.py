@@ -3,6 +3,7 @@ import math
 import wave
 from array import array
 
+import av
 import pytest
 
 from app.core.config import AUDIO_CODEC, AUDIO_SAMPLE_RATE, PROXY_MAX_HEIGHT, JobErrorCodeEnum
@@ -12,6 +13,7 @@ from app.services.video.ingestion import (
     check_audio_not_silent,
     check_packet_integrity,
     check_supported_formats,
+    cut_media,
     extract_normalized_audio,
     generate_keyframe_index,
     generate_proxy_video,
@@ -225,6 +227,51 @@ def test_proxy_keyframes_are_regular_when_the_video_is_scaled(make_sample, tmp_p
 def test_generate_keyframe_index_rejects_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         generate_keyframe_index(tmp_path / "missing.mp4", tmp_path / "keyframes.json")
+
+
+def last_keyframe_before(path, seconds):
+    """The encoder of the synthetic samples does not always place keyframes on exact seconds."""
+    with av.open(str(path)) as container:
+        packets = container.demux(container.streams.video[0])
+        return max(float(p.pts * p.time_base) for p in packets if p.size and p.is_keyframe and p.pts * p.time_base <= seconds)
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_cut_media_starts_on_the_previous_keyframe(make_sample, tmp_path, extension, video_codec, audio_codec):
+    source = make_sample(extension, video_codec, audio_codec, seconds=10, gop_size=50)
+    output = tmp_path / f"cut.{extension}"
+
+    cut = cut_media(source, output, 3.0, 7.0)
+
+    media = inspect_media(output)
+    assert cut.path == output
+    assert cut.start_seconds == pytest.approx(last_keyframe_before(source, 3.0), abs=0.1)
+    assert media.duration_seconds == pytest.approx(7 - cut.start_seconds, abs=0.5)
+    assert media.streams_of("video")[0].codec_name == inspect_media(source).streams_of("video")[0].codec_name
+    assert media.streams_of("audio")[0].codec_name == inspect_media(source).streams_of("audio")[0].codec_name
+
+
+@pytest.mark.parametrize("extension,video_codec,audio_codec", CONTAINERS)
+def test_cut_media_output_can_be_processed(make_sample, tmp_path, extension, video_codec, audio_codec):
+    source = make_sample(extension, video_codec, audio_codec, seconds=10, gop_size=50)
+    cut = cut_media(source, tmp_path / f"cut.{extension}", 3.0, 7.0)
+
+    proxy_path = generate_proxy_video(cut.path, tmp_path / "proxy.mp4")
+
+    assert inspect_media(proxy_path).duration_seconds == pytest.approx(inspect_media(cut.path).duration_seconds, abs=0.5)
+    check_packet_integrity(scan_packets(cut.path))
+
+
+def test_cut_media_can_keep_until_the_end(make_sample, tmp_path):
+    cut = cut_media(make_sample(seconds=10, gop_size=50), tmp_path / "cut.mp4", 4.0, math.inf)
+
+    assert 0 < cut.start_seconds <= 4
+    assert inspect_media(cut.path).duration_seconds == pytest.approx(10 - cut.start_seconds, abs=0.5)
+
+
+def test_cut_media_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        cut_media(tmp_path / "missing.mp4", tmp_path / "cut.mp4", 0.0, 1.0)
 
 
 def test_generate_proxy_video_is_faststart(make_sample, tmp_path):

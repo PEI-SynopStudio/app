@@ -84,9 +84,8 @@ PROXY_FILE = "proxy.mp4"
 WAVEFORM_FILE = "waveform.json"
 KEYFRAMES_FILE = "keyframes.json"
 ERROR_INVALID_STAGED_FILE = "Invalid staged file name: {name!r}"
-ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED = (
-    "Time ranges are not supported for uploaded files yet; upload the full recording."
-)
+CUT_FILE_PREFIX = "cut-"
+ERROR_CUT_FAILED = "Failed to cut the requested time range: {details}"
 ERROR_INTERNAL = "Unexpected error during ingestion; see the worker logs."
 LOG_INGESTION_FAILED = "Ingestion failed for project %s"
 

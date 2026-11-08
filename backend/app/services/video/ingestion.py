@@ -27,6 +27,7 @@ from app.core.config import (
     DECIBEL_FACTOR,
     ERROR_AUDIO_EXTRACTION_FAILED,
     ERROR_CORRUPTED_PACKETS,
+    ERROR_CUT_FAILED,
     ERROR_DOWNLOAD_FAILED,
     ERROR_FILE_NOT_FOUND,
     ERROR_KEYFRAME_INDEX_FAILED,
@@ -99,6 +100,11 @@ class Waveform(BaseModel):
     window_seconds: float
     peaks: List[float]
     rms: List[float]
+
+
+class MediaCut(BaseModel):
+    path: Path
+    start_seconds: float
 
 
 class KeyframeIndex(BaseModel):
@@ -465,6 +471,63 @@ def _proxy_size(width: int, height: int) -> Tuple[int, int]:
     target_height -= target_height % EVEN_DIMENSION
     target_width = round(width * target_height / height / EVEN_DIMENSION) * EVEN_DIMENSION
     return target_width, target_height
+
+
+# Copy a time range into a new file of the same format with PyAV, without re-encoding.
+# Source: MS2 FR02 – Inputs (optional start/end timecodes); US05.
+def cut_media(input_path: Path, output_path: Path, start_seconds: float, end_seconds: float) -> MediaCut:
+    """Keep the first video and audio streams from the last keyframe at or before the start until the end.
+
+    Without re-encoding the video can only begin on a keyframe, so `start_seconds` of the result is where the
+    copy really begins in the input; the time 0 of the output is that point.
+    """
+    if not input_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=input_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with av.open(str(input_path)) as source:
+            video_in, audio_in = source.streams.video[0], source.streams.audio[0]
+            offset = (source.start_time or 0) / av.time_base
+            cut_end = offset + end_seconds
+            source.seek(int((offset + start_seconds) * av.time_base), backward=True)
+
+            with av.open(str(output_path), MEDIA_WRITE_MODE) as target:
+                outputs = {
+                    video_in.index: target.add_stream_from_template(video_in),
+                    audio_in.index: target.add_stream_from_template(audio_in),
+                }
+                origin: Optional[float] = None
+                finished = set()
+                for packet in source.demux(video_in, audio_in):
+                    if not packet.size or packet.pts is None:
+                        continue
+                    packet_time = float(packet.pts * packet.time_base)
+                    if origin is None:
+                        if packet.stream.index != video_in.index or not packet.is_keyframe:
+                            continue
+                        origin = packet_time
+                    elif packet_time < origin:
+                        continue
+
+                    # Compared in decode order: a later frame shown before the end may depend on this packet.
+                    decode_ticks = packet.dts if packet.dts is not None else packet.pts
+                    if float(decode_ticks * packet.time_base) >= cut_end:
+                        finished.add(packet.stream.index)
+                        if len(finished) == len(outputs):
+                            break
+                        continue
+
+                    shift = round(origin / float(packet.time_base))
+                    packet.pts -= shift
+                    if packet.dts is not None:
+                        packet.dts -= shift
+                    packet.stream = outputs[packet.stream.index]
+                    target.mux(packet)
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_CUT_FAILED.format(details=exc)) from exc
+
+    return MediaCut(path=output_path, start_seconds=origin - offset if origin is not None else start_seconds)
 
 
 # Download a YouTube video, or only a time interval of it, to MP4 (max 1080p) with the yt-dlp API.

@@ -42,6 +42,9 @@ def _record_success(db: Session, job: Job, project: Project, asset: Optional[Med
         output = IngestionOutput.model_validate(job.output)
         for field in ASSET_METADATA_FIELDS:
             setattr(asset, field, getattr(output, field))
+        # A cut without re-encoding starts on the keyframe before the requested time (FR11).
+        if output.time_start_seconds is not None:
+            asset.time_start_seconds = output.time_start_seconds
         asset.status = MediaAssetStatus.READY
         db.add(AudioTrack(
             media_asset_id=asset.id,

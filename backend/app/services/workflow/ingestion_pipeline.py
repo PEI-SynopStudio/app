@@ -1,17 +1,19 @@
 import logging
+import math
+import os
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, Optional, Tuple
 
 from app.core.config import (
     ANALYSIS_DIR,
     AUDIO_DIR,
     AUDIO_FILE,
+    CUT_FILE_PREFIX,
     DOWNLOAD_FILE,
     ERROR_DURATION_EXCEEDED,
     ERROR_FILE_NOT_FOUND,
     ERROR_INTERNAL,
     ERROR_INVALID_STAGED_FILE,
-    ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED,
     JSON_DUMP_MODE,
     KEYFRAMES_FILE,
     LOG_INGESTION_FAILED,
@@ -31,9 +33,12 @@ from app.core.exceptions import MediaProcessingError, MediaRejectedError
 from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
+    MediaInfo,
+    PacketScan,
     check_audio_not_silent,
     check_packet_integrity,
     check_supported_formats,
+    cut_media,
     download_youtube_video,
     extract_normalized_audio,
     generate_keyframe_index,
@@ -78,16 +83,14 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         source_path = _fetch_source(storage, request, advance)
 
         advance(JobStepProcessingEnum.INSPECTING_MEDIA)
-        media = inspect_media(source_path)
-        check_supported_formats(media)
-        limit = get_settings().max_duration_seconds
-        if media.duration_seconds and media.duration_seconds > limit:
-            raise MediaRejectedError(
-                JobErrorCodeEnum.DURATION_LIMIT_EXCEEDED,
-                ERROR_DURATION_EXCEEDED.format(duration=media.duration_seconds, limit=limit),
-            )
-        scan = scan_packets(source_path)
-        check_packet_integrity(scan)
+        media, scan = _inspect_source(source_path)
+        cut_start = None
+        if request.parameters.source_url is None:
+            params = request.parameters
+            time_range = validate_time_range(params.time_start, params.time_end, media.duration_seconds or math.inf)
+            if time_range is not None:
+                cut_start = _cut_upload(source_path, *time_range)
+                media, scan = _inspect_source(source_path)
 
         # Audio first: a silent recording is rejected before the proxy is encoded.
         advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
@@ -100,7 +103,7 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         generate_keyframe_index(proxy_path, storage.path(project_id, ANALYSIS_DIR, KEYFRAMES_FILE))
 
         advance(JobStepProcessingEnum.PERSISTING_RESULTS)
-        output = _build_output(storage, request, media, scan.is_vfr, source_path)
+        output = _build_output(storage, request, media, scan.is_vfr, source_path, cut_start)
     except (MediaRejectedError, MediaProcessingError) as exc:
         return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
@@ -113,6 +116,32 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         raise
 
     return publish(status=JobStatusEnum.COMPLETED, step_progress=PROGRESS_MAX, output=output.model_dump(mode=JSON_DUMP_MODE))
+
+
+def _inspect_source(source_path: Path) -> Tuple[MediaInfo, PacketScan]:
+    """Run the FR02 step 3 checks on a source file; raises when it must be rejected."""
+    media = inspect_media(source_path)
+    check_supported_formats(media)
+    limit = get_settings().max_duration_seconds
+    if media.duration_seconds and media.duration_seconds > limit:
+        raise MediaRejectedError(
+            JobErrorCodeEnum.DURATION_LIMIT_EXCEEDED,
+            ERROR_DURATION_EXCEEDED.format(duration=media.duration_seconds, limit=limit),
+        )
+    scan = scan_packets(source_path)
+    check_packet_integrity(scan)
+    return media, scan
+
+
+def _cut_upload(source_path: Path, start_seconds: float, end_seconds: float) -> float:
+    """Replace an upload by its requested time range; returns where the kept part really starts."""
+    partial_path = source_path.with_name(CUT_FILE_PREFIX + source_path.name)
+    try:
+        cut = cut_media(source_path, partial_path, start_seconds, end_seconds)
+        os.replace(partial_path, source_path)
+    finally:
+        partial_path.unlink(missing_ok=True)
+    return cut.start_seconds
 
 
 def _fetch_source(
@@ -132,8 +161,6 @@ def _fetch_source(
             params.time_end,
         )
 
-    if params.time_start is not None or params.time_end is not None:
-        raise ValueError(ERROR_UPLOAD_TIME_RANGE_UNSUPPORTED)
     if not request.staged_file:
         raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
     source_dir = storage.project_dir(project_id) / SOURCE_DIR
@@ -149,7 +176,12 @@ def _fetch_source(
 
 
 def _build_output(
-    storage: LocalStorage, request: JobRequestMessage, media, is_vfr: bool, source_path: Path
+    storage: LocalStorage,
+    request: JobRequestMessage,
+    media: MediaInfo,
+    is_vfr: bool,
+    source_path: Path,
+    cut_start: Optional[float],
 ) -> IngestionOutput:
     """Collect what the backend persists when the job completes (FR02 step 6)."""
     url = request.parameters.source_url
@@ -163,4 +195,5 @@ def _build_output(
         audio_key=PurePosixPath(AUDIO_DIR, AUDIO_FILE).as_posix(),
         waveform_key=PurePosixPath(ANALYSIS_DIR, WAVEFORM_FILE).as_posix(),
         keyframes_key=PurePosixPath(ANALYSIS_DIR, KEYFRAMES_FILE).as_posix(),
+        time_start_seconds=cut_start,
     )

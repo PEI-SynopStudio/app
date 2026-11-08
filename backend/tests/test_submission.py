@@ -117,6 +117,16 @@ def test_upload_submission_closes_the_session(db, storage, dispatcher):
     assert db.get(MediaAsset, job.media_asset_id).source_key == f"source/{staged_file}"
 
 
+def test_upload_submission_records_the_requested_range(db, storage, dispatcher):
+    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
+
+    job = submit_upload_ingestion(db, storage, dispatcher, session, "00:01:00", "00:02:00")
+
+    asset = db.get(MediaAsset, job.media_asset_id)
+    assert (asset.time_start_seconds, asset.time_end_seconds) == (60, 120)
+    assert (dispatcher.requests[0].parameters.time_start, dispatcher.requests[0].parameters.time_end) == ("00:01:00", "00:02:00")
+
+
 def test_refused_upload_keeps_the_session(db, storage, dispatcher):
     project_id = make_project(db)
     submit_url(db, dispatcher, project_id)
@@ -148,12 +158,21 @@ def finished_asset(db, storage, project_id, status=MediaAssetStatus.READY):
         status=status,
         source_key="source/old.mp4",
         proxy_key="proxy/proxy.mp4",
+        keyframes_key="analysis/keyframes.json",
     )
     db.add(asset)
     db.flush()
-    db.add(AudioTrack(media_asset_id=asset.id, sample_rate=16000, channels=1, format="wav", storage_key="audio/audio.wav"))
+    db.add(AudioTrack(
+        media_asset_id=asset.id,
+        sample_rate=16000,
+        channels=1,
+        format="wav",
+        storage_key="audio/audio.wav",
+        waveform_key="analysis/waveform.json",
+    ))
     db.commit()
-    files = [storage.path(project_id, key) for key in ("source/old.mp4", "proxy/proxy.mp4", "audio/audio.wav")]
+    keys = ("source/old.mp4", "proxy/proxy.mp4", "audio/audio.wav", "analysis/waveform.json", "analysis/keyframes.json")
+    files = [storage.path(project_id, key) for key in keys]
     for file in files:
         file.write_bytes(b"old")
     return asset, files
@@ -171,7 +190,7 @@ def test_a_new_ingestion_replaces_the_previous_video(db, storage, dispatcher, st
     assert db.get(MediaAsset, previous_id) is None
     assert db.get(MediaAsset, job.media_asset_id) is not None
     assert count(db, AudioTrack) == 0
-    assert [file.exists() for file in files] == [False, False, False]
+    assert not any(file.exists() for file in files)
 
 
 def test_an_upload_in_progress_is_not_replaced(db, storage, dispatcher):

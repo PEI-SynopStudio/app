@@ -85,6 +85,32 @@ def audit_details(db, project, action):
     return db.scalar(query).details
 
 
+def test_a_cut_upload_records_where_it_really_starts(db):
+    job, _, asset = make_ingestion(db)
+    asset.time_start_seconds = 12.0
+    db.commit()
+    start(db, job)
+
+    apply_job_event(db, JobUpdateEventSchema(
+        job_id=job.id, status=JobStatusEnum.COMPLETED, step_progress=100, output={**OUTPUT, "time_start_seconds": 8.3}
+    ))
+
+    db.expire_all()
+    assert db.get(MediaAsset, asset.id).time_start_seconds == 8.3
+
+
+def test_a_completed_job_keeps_the_requested_start_when_nothing_was_cut(db):
+    job, _, asset = make_ingestion(db)
+    asset.time_start_seconds = 12.0
+    db.commit()
+    start(db, job)
+
+    complete(db, job)
+
+    db.expire_all()
+    assert db.get(MediaAsset, asset.id).time_start_seconds == 12.0
+
+
 def test_a_running_job_marks_the_project_as_ingesting(db):
     job, project, _ = make_ingestion(db)
 

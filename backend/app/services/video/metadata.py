@@ -36,6 +36,8 @@ class IngestionOutput(TechnicalMetadata):
     audio_key: str
     waveform_key: str
     keyframes_key: str
+    # Where the kept part really starts in an upload cut to a time range; None when it was not cut.
+    time_start_seconds: Optional[float] = None
 
 
 # Collect the technical metadata of the original source from its inspection result.

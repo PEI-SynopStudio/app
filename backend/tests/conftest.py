@@ -49,15 +49,19 @@ def _write_sample(
     seconds: int,
     tone: bool = False,
     frame_times_ms: Optional[Sequence[int]] = None,
+    gop_size: Optional[int] = None,
 ) -> Path:
     """Encode a short synthetic video (blank frames; silent audio, or a 440 Hz tone) with PyAV.
 
     Frames come at a constant rate, or at the exact `frame_times_ms` when given.
+    `gop_size` is the distance between keyframes, in frames.
     """
     with av.open(str(path), "w") as container:
         # All streams must be added before the first packet is muxed.
         video = container.add_stream(video_codec, rate=SAMPLE_FPS)
         video.width, video.height, video.pix_fmt = width, height, "yuv420p"
+        if gop_size is not None:
+            video.codec_context.gop_size = gop_size
         audio = container.add_stream(audio_codec, rate=SAMPLE_RATE, layout=SAMPLE_LAYOUT) if audio_codec else None
 
         time_base = Fraction(1, 1000) if frame_times_ms is not None else Fraction(1, SAMPLE_FPS)
@@ -95,9 +99,10 @@ def make_sample(tmp_path):
         seconds: int = 2,
         tone: bool = False,
         frame_times_ms: Optional[Sequence[int]] = None,
+        gop_size: Optional[int] = None,
     ) -> Path:
         path = tmp_path / f"sample_{video_codec}_{audio_codec}.{extension}"
-        return _write_sample(path, video_codec, audio_codec, width, height, seconds, tone, frame_times_ms)
+        return _write_sample(path, video_codec, audio_codec, width, height, seconds, tone, frame_times_ms, gop_size)
 
     return factory
 

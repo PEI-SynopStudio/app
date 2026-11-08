@@ -193,6 +193,35 @@ def test_chunked_upload_is_assembled_and_ingested(live, storage, make_sample):
     assert len(events) == 1
 
 
+def test_upload_can_be_limited_to_a_time_range(live, make_sample):
+    client, dispatcher, _ = live
+    project_id = new_project(client)
+    upload_id = upload_all(client, project_id, make_sample(seconds=10, tone=True, gop_size=50).read_bytes())
+
+    accepted = client.post(
+        f"/projects/{project_id}/uploads/{upload_id}/complete", json={"start_time": "00:03", "end_time": "00:07"}
+    )
+    dispatcher.join(JOIN_TIMEOUT_SECONDS)
+    body = client.get(f"/projects/{project_id}/ingestion").json()
+
+    assert accepted.status_code == 202
+    assert body["job"]["status"] == "completed"
+    assert 4 <= body["metadata"]["duration_seconds"] <= 7.5
+
+
+def test_an_invalid_time_range_is_refused_before_the_job(live):
+    client, _, _ = live
+    project_id = new_project(client)
+    upload_id = upload_all(client, project_id, b"x" * 10_000)
+
+    response = client.post(
+        f"/projects/{project_id}/uploads/{upload_id}/complete", json={"start_time": "00:07", "end_time": "00:03"}
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/projects/{project_id}/uploads/{upload_id}").status_code == 200
+
+
 def test_renamed_non_video_file_fails_inspection(live):
     """Extension and MIME only pass the first check; the content is still inspected (FR02 step 3)."""
     client, dispatcher, _ = live

@@ -41,10 +41,10 @@ def upload_request(project_id, staged_file="lecture.mp4", **params):
     )
 
 
-def stage_upload(storage, project_id, sample, name="lecture.mp4"):
+def stage_upload(storage, project_id, sample, name="lecture.mp4", **params):
     """Copy a sample into the project's source directory, as the assembled upload would be."""
     shutil.copy(sample, storage.path(project_id, "source", name))
-    return upload_request(project_id, name)
+    return upload_request(project_id, name, **params)
 
 
 def url_request(project_id, url=SAMPLE_URL, **params):
@@ -79,6 +79,7 @@ def test_upload_is_ingested(storage, project_id, make_sample):
     )
     assert final.output["waveform_key"] == "analysis/waveform.json"
     assert final.output["keyframes_key"] == "analysis/keyframes.json"
+    assert final.output["time_start_seconds"] is None
     assert json.loads(storage.path(project_id, "analysis", "keyframes.json").read_text())["times_seconds"][0] == 0
     waveform = json.loads(storage.path(project_id, "analysis", "waveform.json").read_text())
     assert len(waveform["peaks"]) == len(waveform["rms"]) == pytest.approx(20, abs=1)
@@ -175,10 +176,32 @@ def test_invalid_staged_file_fails(storage, project_id, staged_file):
     assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
 
 
-def test_upload_time_range_is_not_supported_yet(storage, project_id):
-    final, _ = run(storage, upload_request(project_id, time_start="0", time_end="1"))
+def test_upload_is_cut_to_the_requested_range(storage, project_id, make_sample):
+    sample = make_sample(seconds=10, tone=True, gop_size=50)
 
-    assert "not supported for uploaded files" in final.error_message
+    final, _ = run(storage, stage_upload(storage, project_id, sample, time_start="3", time_end="7"))
+
+    assert final.status == JobStatusEnum.COMPLETED
+    assert 0 <= final.output["time_start_seconds"] <= 3
+    assert final.output["duration_seconds"] == pytest.approx(7 - final.output["time_start_seconds"], abs=0.5)
+    assert [path.name for path in storage.path(project_id, "source", "x").parent.iterdir()] == ["lecture.mp4"]
+
+
+def test_upload_can_be_cut_with_only_an_end(storage, project_id, make_sample):
+    sample = make_sample(seconds=10, tone=True, gop_size=50)
+
+    final, _ = run(storage, stage_upload(storage, project_id, sample, time_end="4"))
+
+    assert final.status == JobStatusEnum.COMPLETED
+    assert final.output["time_start_seconds"] == pytest.approx(0, abs=0.1)
+    assert final.output["duration_seconds"] == pytest.approx(4, abs=0.5)
+
+
+def test_upload_range_beyond_the_duration_fails(storage, project_id, make_sample):
+    final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True), time_start="20", time_end="30"))
+
+    assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
+    assert "Invalid time range" in final.error_message
 
 
 def test_chunks_are_assembled_by_the_job(storage, project_id, make_sample):
