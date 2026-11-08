@@ -318,6 +318,53 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
+PROGRESS_DECIMALS = 2
+# A job only reaches 100% when the worker reports it as completed.
+JOB_RUNNING_PROGRESS_CAP = 99.0
+# Share of the total progress (start, end) covered by each step of a pipeline.
+JOB_STEP_WEIGHTS = {
+    JobTypeEnum.INGESTION: {
+        JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
+        JobStepProcessingEnum.DOWNLOADING_MEDIA: (5.0, 45.0),
+        JobStepProcessingEnum.INSPECTING_MEDIA: (45.0, 50.0),
+        JobStepProcessingEnum.EXTRACTING_AUDIO: (50.0, 70.0),
+        JobStepProcessingEnum.GENERATING_PROXY: (70.0, 90.0),
+        JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
+        JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
+        JobStepProcessingEnum.FINISHED: (100.0, 100.0),
+    },
+    JobTypeEnum.TRANSCRIPTION: {
+        JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
+        JobStepProcessingEnum.TRANSCRIBING: (5.0, 65.0),
+        JobStepProcessingEnum.DIARIZING: (65.0, 90.0),
+        JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
+        JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
+        JobStepProcessingEnum.FINISHED: (100.0, 100.0),
+    },
+}
+# The statuses a worker is allowed to report; pending and queued belong to the API.
+WORKER_REPORTABLE_STATUSES = (
+    JobStatusEnum.PROCESSING,
+    JobStatusEnum.COMPLETED,
+    JobStatusEnum.FAILED,
+    JobStatusEnum.CANCELLED,
+)
+
+
+class ApplyOutcome(str, Enum):
+    APPLIED = "applied"
+    IGNORED = "ignored"
+    REJECTED = "rejected"
+
+
+EVENT_REJECTED_STATUS = "Workers cannot report status {status}."
+EVENT_REJECTED_UNKNOWN_ATTEMPT = "Event from an unknown attempt."
+EVENT_IGNORED_PAST_ATTEMPT = "Event from a past attempt."
+EVENT_IGNORED_JOB_FINISHED = "Job already finished ({status})."
+EVENT_IGNORED_OUT_OF_ORDER = "Event older than the most recent one."
+EVENT_IGNORED_EARLIER_STEP = "Step precedes the current one."
+EVENT_IGNORED_LOWER_PROGRESS = "Progress is below the current one."
+EVENT_IGNORED_NO_CHANGE = "Event changes nothing."
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
