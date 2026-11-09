@@ -19,6 +19,7 @@ from app.services.storage.local import LocalStorage
 from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
 from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.jobs import create_ingestion_job, queue_job
+from app.services.workflow.progress_hub import JobProgressHub
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
 from app.workers.ingestion_worker import IngestionWorker
 from test_rabbitmq import TEST_RABBITMQ_URL, UNREACHABLE_URL, broker_is_running
@@ -84,14 +85,14 @@ def progress_event(job_id, percent=50.0):
     )
 
 
-def consume(session_factory, bodies, done):
+def consume(session_factory, bodies, done, hub=None):
     """Publish the raw event bodies, run the consumer until `done()` holds and return the media.ingested bodies."""
 
     async def run():
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
             channel = await connection.channel()
-            consumer = JobEventConsumer(TEST_RABBITMQ_URL, session_factory)
+            consumer = JobEventConsumer(TEST_RABBITMQ_URL, session_factory, hub or JobProgressHub())
             await consumer.open(channel)
             sender = await connection.channel()
             exchange, _ = await rabbitmq_module.declare_event_queue(sender)
@@ -171,6 +172,17 @@ def test_progress_event_updates_the_job(queues, session_factory, job):
     assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []
 
 
+def test_applied_event_is_handed_to_the_clients_watching(queues, session_factory, job):
+    job_id, project_id = job.id, job.project_id
+    hub = JobProgressHub()
+
+    with hub.watch(project_id) as updates:
+        consume(session_factory, [progress_event(job_id).model_dump_json().encode()], status_is(session_factory, job_id, JobStatusEnum.PROCESSING), hub)
+
+        update = updates.get_nowait()
+    assert (update.job_id, update.status, update.step_progress) == (job_id, JobStatusEnum.PROCESSING, 50.0)
+
+
 def test_failed_job_announces_nothing(queues, session_factory, job):
     job_id = job.id
     progress = progress_event(job_id)  # created first: the state machine ignores events older than the last one
@@ -217,7 +229,7 @@ def test_consumer_keeps_trying_while_the_broker_is_down(monkeypatch, caplog):
     monkeypatch.setattr(event_consumer, "EVENT_CONSUMER_RETRY_SECONDS", 0.01)
 
     async def run():
-        task = asyncio.create_task(JobEventConsumer(UNREACHABLE_URL, None).run())
+        task = asyncio.create_task(JobEventConsumer(UNREACHABLE_URL, None, JobProgressHub()).run())
         await asyncio.sleep(0.3)
         assert not task.done()
         task.cancel()

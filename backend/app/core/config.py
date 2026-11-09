@@ -72,6 +72,11 @@ UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
 UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
 JOBS_ROUTE_TAG = "jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
+PROGRESS_WS_ROUTE = "/{project_id}/progress"
+# Application close codes start at 4000; 4404 mirrors the HTTP 404.
+WS_CLOSE_PROJECT_NOT_FOUND = 4404
+ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
+PROGRESS_QUEUE_SIZE = 1
 FILE_NAME_MIN_LENGTH = 1
 FILE_NAME_MAX_LENGTH = 255
 CONTENT_TYPE_MAX_LENGTH = 100

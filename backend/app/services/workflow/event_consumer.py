@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage
@@ -20,14 +20,16 @@ from app.core.config import (
     LOG_EVENT_NOT_APPLIED,
     LOG_EVENT_UNKNOWN_JOB,
     MEDIA_INGESTED_EVENT,
+    ApplyOutcome,
     JobStatusEnum,
     JobTypeEnum,
 )
 from app.core.exceptions import JobNotFoundError
 from app.database.models import Job
-from app.schemas.job import JobUpdateEventSchema
+from app.schemas.job import JobStatusResponseSchema, JobUpdateEventSchema
 from app.services.video.metadata import IngestionOutput
 from app.services.workflow.jobs import apply_job_event
+from app.services.workflow.progress_hub import JobProgressHub
 from app.services.workflow.rabbitmq import declare_event_queue, declare_media_events_exchange
 
 logger = logging.getLogger(__name__)
@@ -49,9 +51,10 @@ class MediaIngestedEvent(BaseModel):
 class JobEventConsumer:
     """Runs inside the API process; prefetch 1 applies the events strictly in the order they were published."""
 
-    def __init__(self, url: str, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, url: str, session_factory: sessionmaker[Session], hub: JobProgressHub) -> None:
         self._url = url
         self._session_factory = session_factory
+        self._hub = hub
 
     async def run(self) -> None:
         """Runs until cancelled, connecting again whenever the connection is lost.
@@ -86,7 +89,9 @@ class JobEventConsumer:
             return
 
         try:
-            ingested = await asyncio.to_thread(self._apply, event)
+            update, ingested = await asyncio.to_thread(self._apply, event)
+            if update is not None:
+                self._hub.publish(update)
             if ingested is not None:
                 await self._publish_media_ingested(ingested)
         except JobNotFoundError:
@@ -105,17 +110,24 @@ class JobEventConsumer:
         else:
             await message.ack()
 
-    def _apply(self, event: JobUpdateEventSchema) -> Optional[MediaIngestedEvent]:
-        """Returns the event to announce; a repeated completed event announces again, consumers use the job ID."""
+    def _apply(
+        self, event: JobUpdateEventSchema
+    ) -> Tuple[Optional[JobStatusResponseSchema], Optional[MediaIngestedEvent]]:
+        """Returns the new state to show, if it changed, and the event to announce.
+
+        A repeated completed event announces again; consumers use the job ID.
+        """
         with self._session_factory() as db:
             result = apply_job_event(db, event)
+            job = db.get(Job, event.job_id)
+            update = JobStatusResponseSchema.model_validate(job) if result.outcome == ApplyOutcome.APPLIED else None
             completed = event.status == JobStatusEnum.COMPLETED and result.job.status == JobStatusEnum.COMPLETED
             if not completed or result.job.job_type != JobTypeEnum.INGESTION:
-                return None
+                return update, None
             output = IngestionOutput.model_validate(result.job.output)
-            return MediaIngestedEvent(
+            return update, MediaIngestedEvent(
                 job_id=event.job_id,
-                project_id=db.get(Job, event.job_id).project_id,
+                project_id=job.project_id,
                 audio_path=output.audio_key,
                 proxy_path=output.proxy_key,
                 occurred_at=datetime.now(timezone.utc),

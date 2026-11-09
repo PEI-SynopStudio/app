@@ -2,7 +2,7 @@ import logging
 import uuid
 from dataclasses import fields
 from datetime import timedelta
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -28,7 +28,7 @@ from app.core.config import (
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
 from app.database.models import Job
-from app.schemas.job import IngestionParams, JobUpdateEventSchema
+from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.workflow.ingestion_results import record_ingestion_outcome
@@ -126,15 +126,14 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
 
 # Fail the running jobs whose worker went silent, so they do not block their projects forever.
 # Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (periodic sweep, no retries).
-def sweep_stalled_jobs(db: Session) -> int:
-    """Only running jobs: a queued job is just waiting for a free worker. Returns how many jobs were failed."""
-    failed = 0
+def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
+    """Only running jobs: a queued job is just waiting for a free worker. Returns the new state of the failed jobs."""
+    failed = []
     for job_id in db.scalars(select(Job.id).where(Job.status == JobStatusEnum.PROCESSING)).all():
         # Locked and read again, so an event that arrives in the meantime is not overwritten.
         job = db.get(Job, job_id, with_for_update=True, populate_existing=True)
         if job is not None and job.status == JobStatusEnum.PROCESSING and _has_stalled(job):
-            fail_job(db, job, JobErrorCodeEnum.TIMEOUT, ERROR_JOB_STALLED)
-            failed += 1
+            failed.append(JobStatusResponseSchema.model_validate(fail_job(db, job, JobErrorCodeEnum.TIMEOUT, ERROR_JOB_STALLED)))
         else:
             db.commit()
     return failed

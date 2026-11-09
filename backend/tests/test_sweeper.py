@@ -27,6 +27,7 @@ from app.services.storage.local import LocalStorage
 from app.services.video.uploads import purge_expired_uploads, start_upload
 from app.services.workflow import sweeper
 from app.services.workflow.jobs import apply_job_event, create_ingestion_job, queue_job, sweep_stalled_jobs
+from app.services.workflow.progress_hub import JobProgressHub
 from app.services.workflow.sweeper import run_periodic_sweep, sweep_once
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -75,7 +76,7 @@ def stored(db, job):
 def test_silent_job_is_failed_with_the_timeout_code(db):
     job = running_job(db, silent_for=TWO_HOURS)
 
-    assert sweep_stalled_jobs(db) == 1
+    assert len(sweep_stalled_jobs(db)) == 1
 
     swept = stored(db, job)
     assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
@@ -89,7 +90,7 @@ def test_silent_job_is_failed_with_the_timeout_code(db):
 def test_job_that_keeps_reporting_is_left_alone(db):
     job = running_job(db, silent_for=timedelta(minutes=1))
 
-    assert sweep_stalled_jobs(db) == 0
+    assert len(sweep_stalled_jobs(db)) == 0
 
     assert stored(db, job).status == JobStatusEnum.PROCESSING
 
@@ -97,7 +98,7 @@ def test_job_that_keeps_reporting_is_left_alone(db):
 def test_download_gets_a_longer_limit(db):
     job = running_job(db, silent_for=TWO_HOURS, step=JobStepProcessingEnum.DOWNLOADING_MEDIA)
 
-    assert sweep_stalled_jobs(db) == 0
+    assert len(sweep_stalled_jobs(db)) == 0
 
     assert stored(db, job).status == JobStatusEnum.PROCESSING
 
@@ -105,7 +106,7 @@ def test_download_gets_a_longer_limit(db):
 def test_download_stalled_past_its_limit_is_failed(db):
     job = running_job(db, silent_for=timedelta(hours=6), step=JobStepProcessingEnum.DOWNLOADING_MEDIA)
 
-    assert sweep_stalled_jobs(db) == 1
+    assert len(sweep_stalled_jobs(db)) == 1
 
     assert stored(db, job).error_code == JobErrorCodeEnum.TIMEOUT
 
@@ -116,7 +117,7 @@ def test_queued_job_is_not_swept(db):
     job.updated_at = utc_now() - timedelta(days=2)
     db.commit()
 
-    assert sweep_stalled_jobs(db) == 0
+    assert len(sweep_stalled_jobs(db)) == 0
 
     assert stored(db, job).status == JobStatusEnum.QUEUED
 
@@ -180,6 +181,28 @@ def test_sweep_logs_what_it_did(session_factory, db, storage, caplog):
     assert "1 stalled job(s), 1 abandoned upload(s)" in caplog.text
 
 
+def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, storage, monkeypatch):
+    monkeypatch.setenv("SWEEP_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    job = running_job(db, silent_for=TWO_HOURS)
+    hub = JobProgressHub()
+
+    async def run():
+        with hub.watch(job.project_id) as updates:
+            task = asyncio.create_task(run_periodic_sweep(session_factory, storage, hub))
+            update = await asyncio.wait_for(updates.get(), 20)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return update
+
+    try:
+        update = asyncio.run(run())
+    finally:
+        get_settings.cache_clear()
+
+    assert (update.job_id, update.status, update.error_code) == (job.id, JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
+
+
 def test_periodic_sweep_survives_a_failed_round(monkeypatch, caplog):
     monkeypatch.setenv("SWEEP_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
@@ -189,11 +212,12 @@ def test_periodic_sweep_survives_a_failed_round(monkeypatch, caplog):
         rounds.append(1)
         if len(rounds) == 1:
             raise ConnectionError("database restarting")
+        return []
 
     monkeypatch.setattr(sweeper, "sweep_once", flaky_sweep)
 
     async def run():
-        task = asyncio.create_task(run_periodic_sweep(None, None))
+        task = asyncio.create_task(run_periodic_sweep(None, None, JobProgressHub()))
         while len(rounds) < 3:
             await asyncio.sleep(0.01)
         task.cancel()
