@@ -10,6 +10,7 @@ from app.core.config import (
     ERROR_INGESTION_NOT_STARTED,
     INGESTION_ROUTE_TAG,
     INGESTION_STATUS_ROUTE,
+    MEDIA_ROUTE,
     PROJECTS_ROUTE_PREFIX,
     TIMECODE_MAX_LENGTH,
     URL_INGESTION_ROUTE,
@@ -22,6 +23,7 @@ from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import ObjectStorage, get_object_storage
 from app.services.video.metadata import TechnicalMetadata
+from app.services.video.playback import MediaLinks, media_links
 from app.services.video.sources import validate_source_url, validate_time_range
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.rabbitmq import get_dispatcher
@@ -81,3 +83,17 @@ def read_ingestion(project_id: str, db: Session = Depends(get_db)):
         )
     metadata = TechnicalMetadata.model_validate(job.output) if job.status == JobStatusEnum.COMPLETED else None
     return IngestionOverview(job=JobStatusResponseSchema.model_validate(job), metadata=metadata)
+
+
+# Return temporary links to the proxy video and the waveform of the finished video.
+# Source: MS3 §1.1.6 (media files served through signed, time-limited URLs).
+@router.get(MEDIA_ROUTE, response_model=MediaLinks)
+def read_media_links(
+    project_id: str,
+    db: Session = Depends(get_db),
+    object_storage: ObjectStorage = Depends(get_object_storage),
+):
+    try:
+        return media_links(db, object_storage, project_id)
+    except SERVICE_ERRORS as exc:
+        raise http_error(exc) from exc

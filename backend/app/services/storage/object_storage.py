@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 import boto3
 from boto3.exceptions import S3UploadFailedError
@@ -54,27 +54,27 @@ class ObjectStorage(ABC):
     def delete_project(self, project_id: str) -> None:
         """Remove every object of the project (US34)."""
 
+    @abstractmethod
+    def signed_url(self, project_id: str, key: str, content_type: str, expires_in_seconds: int) -> str:
+        """Return a temporary link to an object, served with the given content type."""
+
 
 # Keep the media of every project in one bucket of the S3 API, under projects/<project_id>/.
 # Source: architecture §2 (object storage); MS2 NFR Security (AES-256 at rest, applied by SeaweedFS).
 class S3ObjectStorage(ObjectStorage):
     """Calls are blocking: run them in workers or in threads, never directly in the event loop."""
 
-    def __init__(self, endpoint_url: str, access_key: str, secret_key: str, bucket: str) -> None:
+    def __init__(
+        self,
+        endpoint_url: str,
+        access_key: str,
+        secret_key: str,
+        bucket: str,
+        public_endpoint_url: Optional[str] = None,
+    ) -> None:
         self._bucket = bucket
-        # A session of its own: the default boto3 session is not safe to share between threads.
-        self._client = boto3.session.Session().client(
-            S3_SERVICE_NAME,
-            endpoint_url=endpoint_url,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=S3_REGION,
-            config=Config(
-                signature_version=S3_SIGNATURE_VERSION,
-                s3={"addressing_style": S3_ADDRESSING_STYLE},
-                retries={"mode": S3_RETRY_MODE, "total_max_attempts": S3_MAX_ATTEMPTS},
-            ),
-        )
+        self._client = _s3_client(endpoint_url, access_key, secret_key)
+        self._public_client = _s3_client(public_endpoint_url or endpoint_url, access_key, secret_key)
 
     def ensure_bucket(self) -> None:
         """Create the bucket when missing; safe to call on every start and from several services."""
@@ -109,13 +109,43 @@ class S3ObjectStorage(ObjectStorage):
                     if response.get("Errors"):
                         raise ObjectStorageError(message)
 
+    def signed_url(self, project_id: str, key: str, content_type: str, expires_in_seconds: int) -> str:
+        """Signed locally, without a request to the storage service."""
+        return self._public_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": _project_prefix(project_id) + key, "ResponseContentType": content_type},
+            ExpiresIn=expires_in_seconds,
+        )
+
 
 @lru_cache
 def get_object_storage() -> S3ObjectStorage:
     settings = get_settings()
-    storage = S3ObjectStorage(settings.s3_endpoint_url, settings.s3_access_key, settings.s3_secret_key, settings.s3_bucket)
+    storage = S3ObjectStorage(
+        settings.s3_endpoint_url,
+        settings.s3_access_key,
+        settings.s3_secret_key,
+        settings.s3_bucket,
+        settings.s3_public_endpoint_url,
+    )
     storage.ensure_bucket()
     return storage
+
+
+def _s3_client(endpoint_url: str, access_key: str, secret_key: str):
+    # A session of its own: the default boto3 session is not safe to share between threads.
+    return boto3.session.Session().client(
+        S3_SERVICE_NAME,
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=S3_REGION,
+        config=Config(
+            signature_version=S3_SIGNATURE_VERSION,
+            s3={"addressing_style": S3_ADDRESSING_STYLE},
+            retries={"mode": S3_RETRY_MODE, "total_max_attempts": S3_MAX_ATTEMPTS},
+        ),
+    )
 
 
 @contextmanager

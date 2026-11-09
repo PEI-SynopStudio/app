@@ -13,6 +13,9 @@ DEFAULT_S3_ENDPOINT_URL = "http://seaweedfs:8333"
 DEFAULT_S3_ACCESS_KEY = "pei"
 DEFAULT_S3_SECRET_KEY = "pei"
 DEFAULT_S3_BUCKET = "synopstudio-media"
+# The address browsers use; signatures cover the host, so it cannot be the internal service name.
+DEFAULT_S3_PUBLIC_ENDPOINT_URL = "http://localhost:8333"
+DEFAULT_S3_SIGNED_URL_TTL_SECONDS = 3600
 DEFAULT_ALLOWED_SOURCE_DOMAINS = "youtube.com,youtu.be,vimeo.com"
 DEFAULT_ALLOWED_EXTENSIONS = "mp4,mov,mkv,webm,avi"
 DEFAULT_ALLOWED_VIDEO_CODECS = "h264,hevc,vp9,av1"
@@ -54,6 +57,9 @@ ERROR_S3_DELETE_FAILED = "Could not delete the object {key!r}."
 ERROR_S3_DELETE_PROJECT_FAILED = "Could not delete the objects of project {project_id}."
 ERROR_STORAGE_UNAVAILABLE = "The storage service is unavailable; please try again."
 LOG_STORAGE_UNAVAILABLE = "Object storage request failed"
+ERROR_MEDIA_NOT_READY = "Project {project_id} has no finished video yet."
+PROXY_CONTENT_TYPE = "video/mp4"
+WAVEFORM_CONTENT_TYPE = "application/json"
 
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
@@ -84,6 +90,7 @@ PROJECT_ID_ROUTE = "/{project_id}"
 INGESTION_ROUTE_TAG = "ingestion"
 URL_INGESTION_ROUTE = "/{project_id}/ingestions/url"
 INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
+MEDIA_ROUTE = "/{project_id}/media"
 URL_MAX_LENGTH = 2048
 TIMECODE_MAX_LENGTH = 16
 ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
@@ -544,6 +551,8 @@ class Settings:
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str
+    s3_public_endpoint_url: str
+    s3_signed_url_ttl_seconds: int
     allowed_source_domains: Tuple[str, ...]
     allowed_extensions: Tuple[str, ...]
     allowed_video_codecs: Tuple[str, ...]
@@ -572,6 +581,8 @@ def get_settings() -> Settings:
         s3_access_key=os.environ.get("S3_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY),
         s3_secret_key=os.environ.get("S3_SECRET_KEY", DEFAULT_S3_SECRET_KEY),
         s3_bucket=os.environ.get("S3_BUCKET", DEFAULT_S3_BUCKET),
+        s3_public_endpoint_url=os.environ.get("S3_PUBLIC_ENDPOINT_URL", DEFAULT_S3_PUBLIC_ENDPOINT_URL),
+        s3_signed_url_ttl_seconds=int(os.environ.get("S3_SIGNED_URL_TTL_SECONDS", DEFAULT_S3_SIGNED_URL_TTL_SECONDS)),
         allowed_source_domains=_csv("ALLOWED_SOURCE_DOMAINS", DEFAULT_ALLOWED_SOURCE_DOMAINS),
         allowed_extensions=_csv("ALLOWED_EXTENSIONS", DEFAULT_ALLOWED_EXTENSIONS),
         allowed_video_codecs=_csv("ALLOWED_VIDEO_CODECS", DEFAULT_ALLOWED_VIDEO_CODECS),

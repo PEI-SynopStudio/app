@@ -1,4 +1,6 @@
 import os
+import time
+import urllib.error
 import urllib.request
 import uuid
 
@@ -148,6 +150,59 @@ def test_delete_project_reports_objects_that_were_not_deleted(storage, project_i
 def test_invalid_project_id_is_rejected(storage, invalid_id, tmp_path):
     with pytest.raises(ValueError):
         storage.put_file(invalid_id, "audio/audio.wav", local_file(tmp_path, b"data"))
+
+
+def fetch(url, headers=None):
+    """Status, headers and body of a request made the way a browser follows a link, with no credentials."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=10) as response:
+            return response.status, response.headers, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, b""
+
+
+def test_signed_url_serves_the_object_with_its_content_type(storage, project_id, tmp_path):
+    storage.put_file(project_id, "proxy/proxy.mp4", local_file(tmp_path, b"video"))
+
+    status, headers, body = fetch(storage.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 60))
+
+    assert (status, headers["Content-Type"], body) == (200, "video/mp4", b"video")
+
+
+def test_signed_url_supports_range_requests_on_encrypted_data(storage, project_id, tmp_path):
+    data = os.urandom(MULTIPART_SIZE_BYTES)
+    storage.put_file(project_id, "proxy/proxy.mp4", local_file(tmp_path, data))
+    url = storage.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 60)
+
+    status, _, body = fetch(url, {"Range": "bytes=8388000-8389000"})
+
+    assert (status, body) == (206, data[8388000:8389001])
+
+
+def test_signed_url_stops_working_when_it_expires(storage, project_id, tmp_path):
+    storage.put_file(project_id, "proxy/proxy.mp4", local_file(tmp_path, b"video"))
+    url = storage.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 1)
+
+    time.sleep(3)
+
+    assert fetch(url)[0] == 403
+
+
+def test_signed_url_only_opens_the_object_it_was_signed_for(storage, project_id, tmp_path):
+    path = local_file(tmp_path, b"video")
+    storage.put_file(project_id, "proxy/proxy.mp4", path)
+    storage.put_file(project_id, "source/lecture.mp4", path)
+    url = storage.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 60)
+
+    assert fetch(url.replace("proxy/proxy.mp4", "source/lecture.mp4"))[0] == 403
+
+
+def test_signed_url_uses_the_public_address(project_id):
+    store = S3ObjectStorage(UNREACHABLE_ENDPOINT, "key", "secret", "bucket", "https://media.example.org")
+
+    assert store.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 60).startswith(
+        f"https://media.example.org/bucket/projects/{project_id}/proxy/proxy.mp4?"
+    )
 
 
 def test_wrong_credentials_are_reported(storage, bucket, project_id, tmp_path):

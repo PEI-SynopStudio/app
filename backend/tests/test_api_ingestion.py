@@ -4,7 +4,9 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import MediaAssetStatus, SourceType
 from app.core.exceptions import JobDispatchError
+from app.database.models import AudioTrack, MediaAsset
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
@@ -226,3 +228,55 @@ def test_unreachable_broker_answers_503_and_fails_the_job(client):
     assert response.json()["detail"] == "The job could not be queued; please try again."
     job = client.get(f"/projects/{project_id}/ingestion").json()["job"]
     assert (job["status"], job["error_code"]) == ("failed", "internal_error")
+
+
+def finished_video(db, project_id, status=MediaAssetStatus.READY):
+    asset = MediaAsset(
+        project_id=uuid.UUID(project_id),
+        source_type=SourceType.UPLOAD,
+        file_name="lecture.mp4",
+        status=status,
+        proxy_key="proxy/proxy.mp4",
+    )
+    db.add(asset)
+    db.flush()
+    db.add(AudioTrack(
+        media_asset_id=asset.id,
+        sample_rate=16000,
+        channels=1,
+        format="wav",
+        storage_key="audio/audio.wav",
+        waveform_key="analysis/waveform.json",
+    ))
+    db.commit()
+
+
+def test_media_links_are_temporary_and_name_the_right_files(client, db):
+    project_id = new_project(client)
+    finished_video(db, project_id)
+
+    response = client.get(f"/projects/{project_id}/media")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "proxy_url": f"https://storage.test/{project_id}/proxy/proxy.mp4?type=video/mp4&expires=3600",
+        "waveform_url": f"https://storage.test/{project_id}/analysis/waveform.json?type=application/json&expires=3600",
+        "expires_in_seconds": 3600,
+    }
+
+
+def test_media_links_wait_for_a_finished_video(client, db):
+    project_id = new_project(client)
+    assert client.get(f"/projects/{project_id}/media").status_code == 404
+
+    finished_video(db, project_id, status=MediaAssetStatus.PROCESSING)
+
+    assert client.get(f"/projects/{project_id}/media").status_code == 404
+
+
+def test_media_links_of_an_unknown_project_are_not_found(client):
+    assert client.get(f"/projects/{uuid.uuid4()}/media").status_code == 404
+
+
+def test_media_links_reject_an_invalid_project_id(client):
+    assert client.get("/projects/not-a-uuid/media").status_code == 422

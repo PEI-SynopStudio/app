@@ -15,6 +15,9 @@ class InMemoryObjectStorage(ObjectStorage):
     def delete_project(self, project_id):
         self.objects = {item: data for item, data in self.objects.items() if item[0] != project_id}
 
+    def signed_url(self, project_id, key, content_type, expires_in_seconds):
+        return f"https://storage.test/{project_id}/{key}?type={content_type}&expires={expires_in_seconds}"
+
 
 class UnavailableObjectStorage(ObjectStorage):
     def put_file(self, project_id, key, path):
@@ -24,4 +27,7 @@ class UnavailableObjectStorage(ObjectStorage):
         raise ObjectStorageError("storage down")
 
     def delete_project(self, project_id):
+        raise ObjectStorageError("storage down")
+
+    def signed_url(self, project_id, key, content_type, expires_in_seconds):
         raise ObjectStorageError("storage down")

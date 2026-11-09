@@ -17,6 +17,7 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://pei:pei@rabbitmq:5672/}
       S3_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-pei}
       S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
     volumes:
       - ./backend:/app
       - media_data:/data/media
