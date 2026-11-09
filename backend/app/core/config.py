@@ -9,6 +9,10 @@ from typing import Tuple
 # --- Defaults for environment-dependent settings ---
 DEFAULT_MEDIA_ROOT = "/data/media"
 DEFAULT_RABBITMQ_URL = "amqp://pei:pei@rabbitmq:5672/"
+DEFAULT_S3_ENDPOINT_URL = "http://seaweedfs:8333"
+DEFAULT_S3_ACCESS_KEY = "pei"
+DEFAULT_S3_SECRET_KEY = "pei"
+DEFAULT_S3_BUCKET = "synopstudio-media"
 DEFAULT_ALLOWED_SOURCE_DOMAINS = "youtube.com,youtu.be,vimeo.com"
 DEFAULT_ALLOWED_EXTENSIONS = "mp4,mov,mkv,webm,avi"
 DEFAULT_ALLOWED_VIDEO_CODECS = "h264,hevc,vp9,av1"
@@ -33,6 +37,21 @@ ENV_TRUE_VALUE = "true"
 # --- Storage layout ---
 PROJECTS_DIR = "projects"
 TMP_SUFFIX = ".tmp"
+
+# --- Object storage: SeaweedFS through its S3 API (architecture §2) ---
+S3_SERVICE_NAME = "s3"
+S3_REGION = "us-east-1"  # SeaweedFS ignores it, but request signatures need one
+S3_SIGNATURE_VERSION = "s3v4"
+S3_ADDRESSING_STYLE = "path"
+S3_RETRY_MODE = "standard"
+# SeaweedFS can report itself healthy a few seconds before its filer and volumes are ready.
+S3_MAX_ATTEMPTS = 10
+S3_KEY_SEPARATOR = "/"
+S3_BUCKET_EXISTS_CODES = ("BucketAlreadyOwnedByYou", "BucketAlreadyExists")
+ERROR_S3_BUCKET_FAILED = "Could not create the object storage bucket {bucket!r}."
+ERROR_S3_PUT_FAILED = "Could not store the object {key!r}."
+ERROR_S3_DELETE_FAILED = "Could not delete the object {key!r}."
+ERROR_S3_DELETE_PROJECT_FAILED = "Could not delete the objects of project {project_id}."
 
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
@@ -517,6 +536,10 @@ def _csv(name: str, default: str) -> Tuple[str, ...]:
 class Settings:
     media_root: Path
     rabbitmq_url: str
+    s3_endpoint_url: str
+    s3_access_key: str
+    s3_secret_key: str
+    s3_bucket: str
     allowed_source_domains: Tuple[str, ...]
     allowed_extensions: Tuple[str, ...]
     allowed_video_codecs: Tuple[str, ...]
@@ -541,6 +564,10 @@ def get_settings() -> Settings:
     return Settings(
         media_root=Path(os.environ.get("MEDIA_ROOT", DEFAULT_MEDIA_ROOT)),
         rabbitmq_url=os.environ.get("RABBITMQ_URL", DEFAULT_RABBITMQ_URL),
+        s3_endpoint_url=os.environ.get("S3_ENDPOINT_URL", DEFAULT_S3_ENDPOINT_URL),
+        s3_access_key=os.environ.get("S3_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY),
+        s3_secret_key=os.environ.get("S3_SECRET_KEY", DEFAULT_S3_SECRET_KEY),
+        s3_bucket=os.environ.get("S3_BUCKET", DEFAULT_S3_BUCKET),
         allowed_source_domains=_csv("ALLOWED_SOURCE_DOMAINS", DEFAULT_ALLOWED_SOURCE_DOMAINS),
         allowed_extensions=_csv("ALLOWED_EXTENSIONS", DEFAULT_ALLOWED_EXTENSIONS),
         allowed_video_codecs=_csv("ALLOWED_VIDEO_CODECS", DEFAULT_ALLOWED_VIDEO_CODECS),

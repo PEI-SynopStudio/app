@@ -8,3 +8,4 @@ python-multipart>=0.0.12
 yt-dlp>=2024.10.07
 av>=19.0
 aio-pika>=10.2
+boto3>=1.43
