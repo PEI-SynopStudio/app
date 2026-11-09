@@ -1,6 +1,6 @@
 from fastapi import HTTPException, status
 
-from app.core.exceptions import JobNotFoundError
+from app.core.exceptions import JobDispatchError, JobNotFoundError
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectBusyError, ProjectNotFoundError
 from app.services.video.uploads import UploadIncompleteError, UploadNotFoundError
 from app.services.workflow.jobs import IngestionAlreadyRunningError
@@ -13,6 +13,7 @@ SERVICE_ERRORS = (
     ProjectBusyError,
     IngestionAlreadyRunningError,
     JobNotFoundError,
+    JobDispatchError,
     UploadNotFoundError,
     UploadIncompleteError,
 )
@@ -26,6 +27,8 @@ def http_error(exc: Exception) -> HTTPException:
         code = status.HTTP_403_FORBIDDEN
     elif isinstance(exc, (IngestionAlreadyRunningError, UploadIncompleteError, ProjectBusyError)):
         code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, JobDispatchError):
+        code = status.HTTP_503_SERVICE_UNAVAILABLE
     else:
         code = status.HTTP_422_UNPROCESSABLE_CONTENT
     return HTTPException(status_code=code, detail=str(exc))

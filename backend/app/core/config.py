@@ -98,6 +98,13 @@ LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
+# --- RabbitMQ: one durable queue per job type, bound to the jobs exchange (architecture §2) ---
+JOBS_EXCHANGE = "jobs"
+JOBS_QUEUE_FORMAT = "jobs.{job_type}"
+BROKER_CONTENT_TYPE = "application/json"
+# Below the 5 s the NFR allows for a job submission.
+BROKER_PUBLISH_TIMEOUT_SECONDS = 3.0
+
 # --- Chunked upload (FR02 step 1) ---
 UPLOADS_DIR = "uploads"
 UPLOAD_CHUNKS_DIR = "chunks"

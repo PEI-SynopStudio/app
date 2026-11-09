@@ -4,6 +4,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.exceptions import JobDispatchError
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.sources import RemoteVideoInfo
@@ -76,6 +77,11 @@ def fake_youtube(monkeypatch):
         )
 
     return install
+
+
+class UnreachableBrokerDispatcher(JobDispatcher):
+    def dispatch(self, request):
+        raise JobDispatchError("The job could not be queued; please try again.")
 
 
 def new_project(client, licence=True):
@@ -201,3 +207,15 @@ def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample)
     assert client.get(f"/projects/{project_id}").json()["status"] == "ingestion_failed"
     assert body["metadata"] is None
     assert events == []
+
+
+def test_unreachable_broker_answers_503_and_fails_the_job(client):
+    project_id = new_project(client)
+    app.dependency_overrides[get_dispatcher] = lambda: UnreachableBrokerDispatcher()
+
+    response = client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "The job could not be queued; please try again."
+    job = client.get(f"/projects/{project_id}/ingestion").json()["job"]
+    assert (job["status"], job["error_code"]) == ("failed", "internal_error")

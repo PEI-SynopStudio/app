@@ -78,6 +78,10 @@ class MediaRejectedError(ValueError):
         self.code = code
 
 
+class JobDispatchError(Exception):
+    """The job could not be handed to the broker; the job is failed and the client can submit it again."""
+
+
 class MediaProcessingError(RuntimeError):
     """A failure while fetching or processing media; carries the stable code shown to the user."""
 
