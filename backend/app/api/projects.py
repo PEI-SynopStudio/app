@@ -7,6 +7,7 @@ from app.database.session import get_db
 from app.schemas.project import ProjectCreate, ProjectResponse
 from app.services.projects.projects import create_project, delete_project, get_project
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorage, get_object_storage
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[PROJECTS_ROUTE_TAG])
 
@@ -29,8 +30,13 @@ def read(project_id: str, db: Session = Depends(get_db)):
 # Delete a project and all its data; the licence and editorial audit records are kept.
 # Source: US34; MS3 §1.4.3.
 @router.delete(PROJECT_ID_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
-def delete(project_id: str, db: Session = Depends(get_db), storage: LocalStorage = Depends(get_storage)):
+def delete(
+    project_id: str,
+    db: Session = Depends(get_db),
+    storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
+):
     try:
-        delete_project(db, storage, project_id)
+        delete_project(db, storage, object_storage, project_id)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc

@@ -20,6 +20,7 @@ from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorage, get_object_storage
 from app.services.video.metadata import TechnicalMetadata
 from app.services.video.sources import validate_source_url, validate_time_range
 from app.services.workflow.dispatcher import JobDispatcher
@@ -49,13 +50,16 @@ def ingest_url(
     body: UrlIngestionRequest,
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
     dispatcher: JobDispatcher = Depends(get_dispatcher),
 ):
     try:
         url = validate_source_url(body.url)
         # Format and order only; the video duration is known after the probe, inside the job.
         validate_time_range(body.start_time, body.end_time, math.inf)
-        return submit_url_ingestion(db, storage, dispatcher, project_id, url, body.start_time, body.end_time)
+        return submit_url_ingestion(
+            db, storage, object_storage, dispatcher, project_id, url, body.start_time, body.end_time
+        )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 

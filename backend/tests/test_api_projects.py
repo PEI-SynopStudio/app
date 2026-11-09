@@ -8,6 +8,8 @@ from app.core.config import AuditAction, JobTypeEnum, MediaAssetStatus, SourceTy
 from app.database.models import AuditLog, Job, MediaAsset
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorageError, get_object_storage
+from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 
 PROJECT_BODY = {
     "title": "Debate",
@@ -27,8 +29,14 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def client(db_override, storage):
+def object_storage():
+    return InMemoryObjectStorage()
+
+
+@pytest.fixture
+def client(db_override, storage, object_storage):
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = lambda: object_storage
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -91,6 +99,49 @@ def test_deleting_a_project_removes_its_data_and_keeps_the_audit_log(client, sto
     assert db.scalar(select(func.count()).select_from(MediaAsset)) == 0
     actions = db.scalars(select(AuditLog.action).where(AuditLog.project_id == project_uuid)).all()
     assert {AuditAction.LICENCE_CONFIRMED, AuditAction.PROJECT_DELETED} <= set(actions)
+
+
+def test_deleting_a_project_removes_its_objects(client, object_storage):
+    project_id = new_project(client)
+    other_project = str(uuid.uuid4())
+    object_storage.objects[(project_id, "proxy/proxy.mp4")] = b"x"
+    object_storage.objects[(other_project, "proxy/proxy.mp4")] = b"y"
+
+    assert client.delete(f"/projects/{project_id}").status_code == 204
+
+    assert list(object_storage.objects) == [(other_project, "proxy/proxy.mp4")]
+
+
+def test_a_storage_failure_keeps_the_project_so_the_deletion_can_be_repeated(client, storage, object_storage, db):
+    project_id = new_project(client)
+    local_file = storage.path(project_id, "source", "video.mp4")
+    local_file.write_bytes(b"x")
+    app.dependency_overrides[get_object_storage] = lambda: UnavailableObjectStorage()
+
+    response = client.delete(f"/projects/{project_id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "The storage service is unavailable; please try again."
+    assert client.get(f"/projects/{project_id}").status_code == 200
+    assert local_file.exists()
+    actions = db.scalars(select(AuditLog.action).where(AuditLog.project_id == uuid.UUID(project_id))).all()
+    assert AuditAction.PROJECT_DELETED not in actions
+
+    app.dependency_overrides[get_object_storage] = lambda: object_storage
+    assert client.delete(f"/projects/{project_id}").status_code == 204
+    assert client.get(f"/projects/{project_id}").status_code == 404
+
+
+def test_a_storage_that_cannot_be_opened_is_reported(client):
+    project_id = new_project(client)
+
+    def unavailable():
+        raise ObjectStorageError("storage down")
+
+    app.dependency_overrides[get_object_storage] = unavailable
+
+    assert client.delete(f"/projects/{project_id}").status_code == 503
+    assert client.get(f"/projects/{project_id}").status_code == 200
 
 
 def test_a_project_with_an_active_ingestion_cannot_be_deleted(client, db):

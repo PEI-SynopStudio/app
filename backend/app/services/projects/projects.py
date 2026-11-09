@@ -18,6 +18,7 @@ from app.database.models import Job, Project
 from app.schemas.project import ProjectCreate
 from app.services.audit.audit import record_audit
 from app.services.storage.local import LocalStorage
+from app.services.storage.object_storage import ObjectStorage
 
 
 class ProjectNotFoundError(LookupError):
@@ -69,12 +70,17 @@ def require_ingestion_allowed(db: Session, project_id: str) -> Project:
 
 # Delete a project with its videos, jobs and uploads; only the audit records remain.
 # Source: US34; MS3 §1.4.3 (project deletion, licence and editorial records kept for 12 months); FR18.
-def delete_project(db: Session, storage: LocalStorage, project_id: str) -> None:
-    """Refused while a job is active, because its worker would keep writing files for the project."""
+def delete_project(db: Session, storage: LocalStorage, object_storage: ObjectStorage, project_id: str) -> None:
+    """Refused while a job is active, because its worker would keep writing files for the project.
+
+    The objects go first: if the storage fails, the project stays and the deletion can be repeated,
+    instead of leaving videos that nothing refers to any more.
+    """
     project = get_project(db, project_id)
     active = select(Job.id).where(Job.project_id == project.id, Job.status.in_(JOB_ACTIVE_STATUSES)).limit(1)
     if db.scalar(active) is not None:
         raise ProjectBusyError(ERROR_PROJECT_BUSY.format(project_id=project_id))
+    object_storage.delete_project(project_id)
     record_audit(
         db, project.id, AuditAction.PROJECT_DELETED, {field: getattr(project, field) for field in AUDIT_PROJECT_FIELDS}
     )

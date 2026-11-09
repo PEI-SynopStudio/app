@@ -22,6 +22,7 @@ from app.database.models import UploadSession
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorage, get_object_storage
 from app.services.video.sources import validate_time_range
 from app.services.video.uploads import (
     get_upload,
@@ -127,6 +128,7 @@ def complete_upload(
     body: Optional[UploadCompletion] = None,
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
     dispatcher: JobDispatcher = Depends(get_dispatcher),
 ):
     """If the job is refused (e.g. 409), the chunks and the session are kept, so this call can be retried."""
@@ -136,6 +138,8 @@ def complete_upload(
         validate_time_range(time_range.start_time, time_range.end_time, math.inf)
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(storage, session)
-        return submit_upload_ingestion(db, storage, dispatcher, session, time_range.start_time, time_range.end_time)
+        return submit_upload_ingestion(
+            db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time
+        )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc

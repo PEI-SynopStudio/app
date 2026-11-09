@@ -9,8 +9,10 @@ from app.database.base import utc_now
 from app.database.models import AuditLog, Job, MediaAsset, UploadSession
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import get_object_storage
 from app.services.workflow.jobs import fail_job
 from app.services.workflow.rabbitmq import get_dispatcher
+from in_memory_object_storage import InMemoryObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
 CHUNK_SIZE = 4096
@@ -45,6 +47,7 @@ def live(storage, db_override, session_factory):
     events = []
     dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)

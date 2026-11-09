@@ -7,10 +7,12 @@ from fastapi.testclient import TestClient
 from app.core.exceptions import JobDispatchError
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import get_object_storage
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.rabbitmq import get_dispatcher
+from in_memory_object_storage import InMemoryObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -49,6 +51,7 @@ def dispatcher():
 @pytest.fixture
 def client(storage, dispatcher, db_override):
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -60,6 +63,7 @@ def live(storage, db_override, session_factory):
     events = []
     dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)

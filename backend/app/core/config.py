@@ -52,6 +52,8 @@ ERROR_S3_BUCKET_FAILED = "Could not create the object storage bucket {bucket!r}.
 ERROR_S3_PUT_FAILED = "Could not store the object {key!r}."
 ERROR_S3_DELETE_FAILED = "Could not delete the object {key!r}."
 ERROR_S3_DELETE_PROJECT_FAILED = "Could not delete the objects of project {project_id}."
+ERROR_STORAGE_UNAVAILABLE = "The storage service is unavailable; please try again."
+LOG_STORAGE_UNAVAILABLE = "Object storage request failed"
 
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
