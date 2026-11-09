@@ -70,8 +70,25 @@ services:
       timeout: 5s
       retries: 10
 
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.53
+    environment:
+      AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-pei}
+      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
+    ports:
+      - "8333:8333"
+    volumes:
+      - seaweedfs_data:/data
+    command: server -ip=seaweedfs -ip.bind=0.0.0.0 -filer -filer.encryptVolumeData -s3 -s3.encryptVolumeData
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres_data:
   rabbitmq_data:
+  seaweedfs_data:
   media_data:
   frontend_node_modules:
