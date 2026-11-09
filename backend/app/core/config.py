@@ -134,6 +134,8 @@ YTDLP_FORMAT_SORT = ("vcodec:h264", "lang", "quality", "res", "fps", "hdr:12", "
 YTDLP_OUTPUT_CONTAINER = "mp4"
 YTDLP_OUTPUT_TEMPLATE = "{stem}.%(ext)s"
 YTDLP_REMUXER = "FFmpegVideoRemuxer"
+YTDLP_DOWNLOADING_STATUS = "downloading"
+YTDLP_FINISHED_STATUS = "finished"
 ERROR_DOWNLOAD_FAILED = "Failed to download video with yt-dlp: {details}"
 
 # --- Remote sources: URL validation and yt-dlp probe ---
@@ -331,6 +333,8 @@ JOB_STEP_MESSAGES = {
     JobStepProcessingEnum.FINISHED: "Ingestion completed",
 }
 PROGRESS_DECIMALS = 2
+# Every progress event is a database write, so a step reports at most once per interval.
+PROGRESS_EMIT_INTERVAL_SECONDS = 2.0
 # A job only reaches 100% when the worker reports it as completed.
 JOB_RUNNING_PROGRESS_CAP = 99.0
 # Share of the total progress (start, end) covered by each step of a pipeline.

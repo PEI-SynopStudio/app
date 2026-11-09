@@ -6,7 +6,7 @@ from array import array
 from collections import deque
 from fractions import Fraction
 from pathlib import Path
-from typing import Deque, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Tuple
 
 import av
 from av.video.frame import PictureType
@@ -46,6 +46,8 @@ from app.core.config import (
     MEDIA_WRITE_MODE,
     PCM_FULL_SCALE,
     PCM_SAMPLE_TYPECODE,
+    PROGRESS_MAX,
+    PROGRESS_MIN,
     PROXY_AUDIO_BITRATE,
     PROXY_AUDIO_CODEC,
     PROXY_AUDIO_FRAME_SIZE,
@@ -71,6 +73,8 @@ from app.core.config import (
     WAV_READ_MODE,
     WAVEFORM_DECIMALS,
     WAVEFORM_WINDOW_SECONDS,
+    YTDLP_DOWNLOADING_STATUS,
+    YTDLP_FINISHED_STATUS,
     YTDLP_FORMAT_SORT,
     YTDLP_FORMAT_TEMPLATE,
     YTDLP_MAX_HEIGHT,
@@ -82,6 +86,10 @@ from app.core.config import (
 )
 from app.core.exceptions import MediaProcessingError, MediaRejectedError
 from app.schemas.timecode import parse_time
+
+
+# Receives the progress of a long operation, from 0 to 100; it is called often, so it must be cheap.
+ProgressCallback = Callable[[float], None]
 
 
 class StreamInfo(BaseModel):
@@ -286,7 +294,9 @@ def check_supported_formats(media: MediaInfo) -> None:
 
 # Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input) with PyAV.
 # Source: MS2 FR02 – Step 4 (Audio Extraction and Normalization).
-def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
+def extract_normalized_audio(
+    video_path: Path, output_wav_path: Path, on_progress: Optional[ProgressCallback] = None
+) -> Path:
     """Extract and normalize audio stream to uncompressed 16 kHz, 16-bit mono PCM WAV."""
     output_wav_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -295,6 +305,7 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
             if not source.streams.audio:
                 raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
             input_stream = source.streams.audio[0]
+            duration = _duration_seconds(source)
             resampler = av.AudioResampler(
                 format=AUDIO_SAMPLE_FORMAT, layout=AUDIO_LAYOUT, rate=AUDIO_SAMPLE_RATE
             )
@@ -302,6 +313,7 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
             with av.open(str(output_wav_path), MEDIA_WRITE_MODE, format=AUDIO_CONTAINER) as target:
                 output_stream = target.add_stream(AUDIO_CODEC, rate=AUDIO_SAMPLE_RATE, layout=AUDIO_LAYOUT)
                 for frame in source.decode(input_stream):
+                    _report_position(on_progress, frame.time, duration)
                     for resampled in resampler.resample(frame):
                         target.mux(output_stream.encode(resampled))
                 # Flush the resampler and the encoder so no trailing samples are lost.
@@ -365,7 +377,9 @@ def _read_pcm_windows(wav_path: Path, window_seconds: float) -> Iterator[array]:
 
 # Generate a lightweight H.264/AAC proxy (max 720p, +faststart, regular keyframes) for web playback and scrubbing.
 # Source: MS2 FR02 – Step 5 (Visual Proxy); +faststart from the professor's `find_me.py`.
-def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
+def generate_proxy_video(
+    video_path: Path, output_proxy_path: Path, on_progress: Optional[ProgressCallback] = None
+) -> Path:
     """Generate a lightweight proxy video (H.264, max 720p, AAC, +faststart) for timeline scrubbing and web preview."""
     output_proxy_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -375,6 +389,7 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                 raise MediaRejectedError(JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_NO_VIDEO_STREAM)
             video_in = source.streams.video[0]
             audio_in = source.streams.audio[0] if source.streams.audio else None
+            duration = _duration_seconds(source)
             width, height = _proxy_size(video_in.codec_context.width, video_in.codec_context.height)
 
             with av.open(
@@ -423,6 +438,7 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                                 scaled.pict_type = PictureType.I
                                 next_keyframe_time = scaled.time + PROXY_KEYFRAME_INTERVAL_SECONDS
                             target.mux(video_out.encode(scaled))
+                            _report_position(on_progress, scaled.time, duration)
                         else:
                             # AVI can use one tick per packet, too coarse for the shorter chunks of the resampler.
                             if frame.pts is not None:
@@ -463,6 +479,22 @@ def generate_keyframe_index(proxy_path: Path, output_json_path: Path) -> Path:
 
     output_json_path.write_text(KeyframeIndex(times_seconds=times).model_dump_json())
     return output_json_path
+
+
+def _duration_seconds(container: av.container.InputContainer) -> Optional[float]:
+    return container.duration / av.time_base if container.duration else None
+
+
+def _report_position(
+    on_progress: Optional[ProgressCallback], position: Optional[float], duration: Optional[float]
+) -> None:
+    """Report how far a media loop is; nothing is reported when the position or the duration is unknown."""
+    if on_progress is not None and position is not None and duration:
+        on_progress(_percent(position, duration))
+
+
+def _percent(done: float, total: float) -> float:
+    return max(PROGRESS_MIN, min(PROGRESS_MAX, done / total * PROGRESS_MAX))
 
 
 def _proxy_size(width: int, height: int) -> Tuple[int, int]:
@@ -537,6 +569,7 @@ def download_youtube_video(
     output_path: Path,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> Path:
     """Download a video or a time range of it to an MP4 container (max 1080p) using the yt-dlp Python API."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -560,6 +593,9 @@ def download_youtube_video(
         options["download_ranges"] = download_range_func(None, [(start, end)])
         options["force_keyframes_at_cuts"] = True
 
+    if on_progress is not None:
+        options["progress_hooks"] = [_download_progress_hook(on_progress)]
+
     try:
         with YoutubeDL(options) as ydl:
             ydl.download([url])
@@ -567,3 +603,20 @@ def download_youtube_video(
         raise MediaProcessingError(JobErrorCodeEnum.SOURCE_UNAVAILABLE, ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
 
     return output_path.with_suffix(f".{YTDLP_OUTPUT_CONTAINER}")
+
+
+def _download_progress_hook(on_progress: ProgressCallback) -> Callable[[Dict[str, Any]], None]:
+    """yt-dlp restarts its counters for each file (video, then audio), so each file gets an equal share."""
+    finished_files = 0
+
+    def hook(report: Dict[str, Any]) -> None:
+        nonlocal finished_files
+        if report["status"] == YTDLP_FINISHED_STATUS:
+            finished_files += 1
+            return
+        total = report.get("total_bytes") or report.get("total_bytes_estimate")
+        if report["status"] == YTDLP_DOWNLOADING_STATUS and total:
+            files = len(report["info_dict"].get("requested_formats") or ()) or 1
+            on_progress(_percent(finished_files + report["downloaded_bytes"] / total, files))
+
+    return hook

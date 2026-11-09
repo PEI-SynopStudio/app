@@ -72,7 +72,7 @@ def fake_youtube(monkeypatch):
         )
         monkeypatch.setattr(
             ingestion_pipeline, "download_youtube_video",
-            lambda url, output_path, start_time, end_time: shutil.copy(sample, output_path),
+            lambda url, output_path, start_time, end_time, on_progress: shutil.copy(sample, output_path),
         )
 
     return install

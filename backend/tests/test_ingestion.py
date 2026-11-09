@@ -10,6 +10,7 @@ from app.core.config import AUDIO_CODEC, AUDIO_SAMPLE_RATE, PROXY_MAX_HEIGHT, Jo
 from app.core.exceptions import MediaRejectedError
 from app.services.video.ingestion import (
     PacketScan,
+    _download_progress_hook,
     check_audio_not_silent,
     check_packet_integrity,
     check_supported_formats,
@@ -52,6 +53,61 @@ def test_extract_normalized_audio(make_sample, tmp_path, extension, video_codec,
     assert audio.codec_name == AUDIO_CODEC
     assert audio.sample_rate == AUDIO_SAMPLE_RATE
     assert audio.channels == 1
+
+
+def assert_rising_progress(reported):
+    assert reported == sorted(reported)
+    assert reported[0] >= 0 and reported[-1] <= 100
+    assert reported[-1] > 80
+
+
+def test_extract_normalized_audio_reports_progress(make_sample, tmp_path):
+    reported = []
+
+    extract_normalized_audio(make_sample(), tmp_path / "audio.wav", reported.append)
+
+    assert_rising_progress(reported)
+
+
+def test_generate_proxy_video_reports_progress(make_sample, tmp_path):
+    reported = []
+
+    generate_proxy_video(make_sample(), tmp_path / "proxy.mp4", reported.append)
+
+    assert_rising_progress(sorted(reported))
+
+
+def download_report(downloaded, total, formats=None):
+    info = {"requested_formats": formats} if formats else {}
+    return {"status": "downloading", "downloaded_bytes": downloaded, "total_bytes": total, "info_dict": info}
+
+
+def test_download_progress_gives_each_file_an_equal_share():
+    reported = []
+    hook = _download_progress_hook(reported.append)
+    formats = [{"format_id": "video"}, {"format_id": "audio"}]
+
+    hook(download_report(50, 100, formats))
+    hook({"status": "finished", "info_dict": {}})
+    hook(download_report(50, 100, formats))
+
+    assert reported == [25, 75]
+
+
+def test_download_progress_of_a_single_file():
+    reported = []
+
+    _download_progress_hook(reported.append)(download_report(50, 100))
+
+    assert reported == [50]
+
+
+def test_download_progress_needs_a_known_size():
+    reported = []
+
+    _download_progress_hook(reported.append)(download_report(50, None))
+
+    assert reported == []
 
 
 def test_inspect_media_rejects_missing_file(tmp_path):

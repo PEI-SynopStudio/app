@@ -58,7 +58,8 @@ def run(storage, request):
 
 
 def steps(events):
-    return [event.step for event in events if event.status == JobStatusEnum.PROCESSING]
+    """The steps in order; a step can report its progress several times."""
+    return list(dict.fromkeys(event.step for event in events if event.status == JobStatusEnum.PROCESSING))
 
 
 def assert_failed(final, code):
@@ -83,6 +84,30 @@ def test_upload_is_ingested(storage, project_id, make_sample):
     assert json.loads(storage.path(project_id, "analysis", "keyframes.json").read_text())["times_seconds"][0] == 0
     waveform = json.loads(storage.path(project_id, "analysis", "waveform.json").read_text())
     assert len(waveform["peaks"]) == len(waveform["rms"]) == pytest.approx(20, abs=1)
+
+
+def test_long_steps_report_progress_inside_the_step(storage, project_id, make_sample, monkeypatch):
+    monkeypatch.setattr(ingestion_pipeline, "PROGRESS_EMIT_INTERVAL_SECONDS", 0)
+
+    final, events = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
+
+    assert final.status == JobStatusEnum.COMPLETED
+    for step in (JobStepProcessingEnum.EXTRACTING_AUDIO, JobStepProcessingEnum.GENERATING_PROXY):
+        progress = [event.step_progress for event in events if event.step == step]
+        assert progress[0] == 0
+        assert 0 < max(progress) <= 100
+
+
+def test_progress_is_forwarded_at_most_once_per_interval(monkeypatch):
+    clock = iter([0, 1, 3, 3.5, 6])
+    monkeypatch.setattr(ingestion_pipeline.time, "monotonic", lambda: next(clock))
+    sent = []
+
+    forward = ingestion_pipeline._throttled(sent.append)
+    for percent in (10, 20, 30, 40):
+        forward(percent)
+
+    assert sent == [20, 40]
 
 
 def test_every_event_identifies_the_job_and_attempt(storage, project_id, make_sample):
@@ -239,7 +264,7 @@ def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkey
     def fake_probe(url):
         return RemoteVideoInfo(url=url, duration_seconds=600, availability="public")
 
-    def fake_download(url, output_path, start_time, end_time):
+    def fake_download(url, output_path, start_time, end_time, on_progress):
         downloads.append((url, start_time, end_time))
         return shutil.copy(sample, output_path)
 

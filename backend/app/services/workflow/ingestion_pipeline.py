@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import time
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Tuple
 
@@ -18,6 +19,7 @@ from app.core.config import (
     KEYFRAMES_FILE,
     LOG_INGESTION_FAILED,
     PROGRESS_MAX,
+    PROGRESS_EMIT_INTERVAL_SECONDS,
     PROGRESS_MIN,
     PROXY_DIR,
     PROXY_FILE,
@@ -35,6 +37,7 @@ from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import (
     MediaInfo,
     PacketScan,
+    ProgressCallback,
     check_audio_not_silent,
     check_packet_integrity,
     check_supported_formats,
@@ -72,8 +75,10 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         emit(event)
         return event
 
-    def advance(step: JobStepProcessingEnum) -> None:
+    def advance(step: JobStepProcessingEnum) -> ProgressCallback:
+        """Announce a step and return the callback that reports the progress inside it."""
         publish(status=JobStatusEnum.PROCESSING, step=step, step_progress=PROGRESS_MIN)
+        return _throttled(lambda percent: publish(status=JobStatusEnum.PROCESSING, step=step, step_progress=percent))
 
     def fail(code: JobErrorCodeEnum, message: str) -> JobUpdateEventSchema:
         return publish(status=JobStatusEnum.FAILED, step_progress=PROGRESS_MIN, error_code=code, error_message=message)
@@ -93,13 +98,13 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
                 media, scan = _inspect_source(source_path)
 
         # Audio first: a silent recording is rejected before the proxy is encoded.
-        advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
-        audio_path = extract_normalized_audio(source_path, storage.path(project_id, AUDIO_DIR, AUDIO_FILE))
+        report = advance(JobStepProcessingEnum.EXTRACTING_AUDIO)
+        audio_path = extract_normalized_audio(source_path, storage.path(project_id, AUDIO_DIR, AUDIO_FILE), report)
         check_audio_not_silent(audio_path)
         generate_waveform(audio_path, storage.path(project_id, ANALYSIS_DIR, WAVEFORM_FILE))
 
-        advance(JobStepProcessingEnum.GENERATING_PROXY)
-        proxy_path = generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE))
+        report = advance(JobStepProcessingEnum.GENERATING_PROXY)
+        proxy_path = generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE), report)
         generate_keyframe_index(proxy_path, storage.path(project_id, ANALYSIS_DIR, KEYFRAMES_FILE))
 
         advance(JobStepProcessingEnum.PERSISTING_RESULTS)
@@ -116,6 +121,20 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         raise
 
     return publish(status=JobStatusEnum.COMPLETED, step_progress=PROGRESS_MAX, output=output.model_dump(mode=JSON_DUMP_MODE))
+
+
+def _throttled(report: ProgressCallback) -> ProgressCallback:
+    """Forward at most one update per interval; the media loops call this for every frame."""
+    last_sent = time.monotonic()
+
+    def forward(percent: float) -> None:
+        nonlocal last_sent
+        now = time.monotonic()
+        if now - last_sent >= PROGRESS_EMIT_INTERVAL_SECONDS:
+            last_sent = now
+            report(percent)
+
+    return forward
 
 
 def _inspect_source(source_path: Path) -> Tuple[MediaInfo, PacketScan]:
@@ -145,13 +164,13 @@ def _cut_upload(source_path: Path, start_seconds: float, end_seconds: float) -> 
 
 
 def _fetch_source(
-    storage: LocalStorage, request: JobRequestMessage, advance: Callable[[JobStepProcessingEnum], None]
+    storage: LocalStorage, request: JobRequestMessage, advance: Callable[[JobStepProcessingEnum], ProgressCallback]
 ) -> Path:
     """Return the path of the source video: download it (URL) or assemble and locate the upload."""
     project_id = str(request.project_id)
     params = request.parameters
     if params.source_url is not None:
-        advance(JobStepProcessingEnum.DOWNLOADING_MEDIA)
+        report = advance(JobStepProcessingEnum.DOWNLOADING_MEDIA)
         remote = probe_remote_video(str(params.source_url))
         validate_time_range(params.time_start, params.time_end, remote.duration_seconds)
         return download_youtube_video(
@@ -159,6 +178,7 @@ def _fetch_source(
             storage.path(project_id, SOURCE_DIR, DOWNLOAD_FILE),
             params.time_start,
             params.time_end,
+            report,
         )
 
     if not request.staged_file:
