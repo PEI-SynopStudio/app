@@ -59,14 +59,14 @@ class UploadProgress(BaseModel):
     missing_chunks: List[int]
 
 
-def _progress(storage: LocalStorage, session: UploadSession) -> UploadProgress:
+def _progress(object_storage: ObjectStorage, session: UploadSession) -> UploadProgress:
     return UploadProgress(
         upload_id=str(session.id),
         file_name=session.file_name,
         size_bytes=session.size_bytes,
         chunk_size=session.chunk_size,
         total_chunks=session.total_chunks,
-        missing_chunks=missing_chunks(storage, session),
+        missing_chunks=missing_chunks(object_storage, session),
     )
 
 
@@ -77,13 +77,13 @@ def create_upload(
     project_id: str,
     body: UploadStart,
     db: Session = Depends(get_db),
-    storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
-        session = start_upload(db, project_id, body.file_name, body.size_bytes, body.content_type)
+        session = start_upload(db, object_storage, project_id, body.file_name, body.size_bytes, body.content_type)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
-    return _progress(storage, session)
+    return _progress(object_storage, session)
 
 
 @router.get(UPLOAD_ROUTE, response_model=UploadProgress)
@@ -91,10 +91,10 @@ def read_upload(
     project_id: str,
     upload_id: str,
     db: Session = Depends(get_db),
-    storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
-        return _progress(storage, get_upload(db, project_id, upload_id))
+        return _progress(object_storage, get_upload(db, project_id, upload_id))
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 
@@ -108,18 +108,18 @@ def upload_chunk(
     index: int,
     chunk: UploadFile = File(...),
     db: Session = Depends(get_db),
-    storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
         session = get_upload(db, project_id, upload_id)
         # Free the database connection: storing a chunk can take a while.
         db.close()
-        save_chunk(storage, session, index, chunk.file)
+        save_chunk(object_storage, session, index, chunk.file)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 
 
-# Check that every chunk arrived and queue the job, which assembles them and applies the optional time range.
+# Check that every chunk arrived and queue the job, which joins them and applies the optional time range.
 # Source: MS2 FR02 – Inputs (optional start/end timecodes), Step 2 and Outputs (asynchronous ingestion, no UI blocking).
 @router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
 def complete_upload(
@@ -137,7 +137,7 @@ def complete_upload(
         # Format and order only; the video duration is known after the inspection, inside the job.
         validate_time_range(time_range.start_time, time_range.end_time, math.inf)
         session = get_upload(db, project_id, upload_id)
-        require_all_chunks(storage, session)
+        require_all_chunks(object_storage, session)
         return submit_upload_ingestion(
             db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time
         )

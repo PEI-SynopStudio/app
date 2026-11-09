@@ -11,6 +11,7 @@ from app.core.config import (
     FILE_NAME_MAX_LENGTH,
     FK_MEDIA_ASSET_ID,
     FK_PROJECT_ID,
+    STORAGE_UPLOAD_ID_MAX_LENGTH,
     TABLE_UPLOAD_SESSIONS,
 )
 from app.database.base import Base, utc_now
@@ -34,5 +35,7 @@ class UploadSession(Base):
     total_chunks: Mapped[int]
     # Server-chosen name of the assembled file in the project's source directory.
     staged_file: Mapped[str] = mapped_column(String(FILE_NAME_MAX_LENGTH))
+    # ID the object storage gave to this upload; every chunk refers to it.
+    storage_upload_id: Mapped[str] = mapped_column(String(STORAGE_UPLOAD_ID_MAX_LENGTH))
     expires_at: Mapped[datetime]
     created_at: Mapped[datetime] = mapped_column(default=utc_now)

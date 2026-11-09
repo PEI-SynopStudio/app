@@ -155,17 +155,16 @@ def test_matchenum():
 
 
 def test_requestmessage_carries_upload_fields():
-    upload_id = uuid4()
     msg = JobRequestMessage(
         job_id=uuid4(),
         project_id=uuid4(),
         parameters=IngestionParams(media_id=uuid4()),
-        upload_id=upload_id,
+        storage_upload_id="storage-upload",
         staged_file="video.mp4",
     )
 
     restored = JobRequestMessage.model_validate_json(msg.model_dump_json())
-    assert (restored.upload_id, restored.staged_file) == (upload_id, "video.mp4")
+    assert (restored.storage_upload_id, restored.staged_file) == ("storage-upload", "video.mp4")
 
 
 def test_client_cannot_send_internal_upload_fields():

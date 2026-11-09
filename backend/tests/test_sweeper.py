@@ -23,20 +23,20 @@ from app.database.models import AuditLog, Job, MediaAsset, Project, UploadSessio
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
-from app.services.storage.local import LocalStorage
 from app.services.video.uploads import purge_expired_uploads, start_upload
 from app.services.workflow import sweeper
 from app.services.workflow.jobs import apply_job_event, create_ingestion_job, queue_job, sweep_stalled_jobs
 from app.services.workflow.progress_hub import JobProgressHub
 from app.services.workflow.sweeper import run_periodic_sweep, sweep_once
+from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 TWO_HOURS = timedelta(hours=2)
 
 
 @pytest.fixture
-def storage(tmp_path):
-    return LocalStorage(tmp_path / "media")
+def object_storage():
+    return InMemoryObjectStorage()
 
 
 def make_project(db):
@@ -140,48 +140,58 @@ def test_late_event_of_a_swept_job_is_ignored(db):
     assert stored(db, job).status == JobStatusEnum.FAILED
 
 
-def open_upload(db, storage, expired):
-    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
-    chunk = storage.path(str(session.project_id), "uploads", str(session.id), "chunks", "000000")
-    chunk.write_bytes(b"x" * 10)
+def open_upload(db, object_storage, expired):
+    session = start_upload(db, object_storage, make_project(db), "Debate.mp4", 10, "video/mp4")
     if expired:
         session.expires_at = utc_now() - timedelta(seconds=1)
         db.commit()
-    return session, chunk
+    return session
 
 
-def test_expired_upload_is_removed_with_its_chunks(db, storage):
-    session, chunk = open_upload(db, storage, expired=True)
+def test_expired_upload_is_removed_with_its_chunks(db, object_storage):
+    session = open_upload(db, object_storage, expired=True)
     session_id, asset_id = session.id, session.media_asset_id
 
-    assert purge_expired_uploads(db, storage) == 1
+    assert purge_expired_uploads(db, object_storage) == 1
 
     db.expire_all()
-    assert not chunk.parent.parent.exists()
+    assert object_storage.open_uploads == {}
     assert db.get(UploadSession, session_id) is None
     assert db.get(MediaAsset, asset_id) is None
 
 
-def test_upload_in_progress_is_kept(db, storage):
-    session, chunk = open_upload(db, storage, expired=False)
+def test_upload_in_progress_is_kept(db, object_storage):
+    session = open_upload(db, object_storage, expired=False)
 
-    assert purge_expired_uploads(db, storage) == 0
+    assert purge_expired_uploads(db, object_storage) == 0
 
-    assert chunk.exists()
+    assert len(object_storage.open_uploads) == 1
     assert db.get(UploadSession, session.id) is not None
 
 
-def test_sweep_logs_what_it_did(session_factory, db, storage, caplog):
+def test_sweep_logs_what_it_did(session_factory, db, object_storage, caplog):
     running_job(db, silent_for=TWO_HOURS)
-    open_upload(db, storage, expired=True)
+    open_upload(db, object_storage, expired=True)
 
     with caplog.at_level(logging.INFO, logger="app"):
-        sweep_once(session_factory, storage)
+        sweep_once(session_factory, lambda: object_storage)
 
     assert "1 stalled job(s), 1 abandoned upload(s)" in caplog.text
 
 
-def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, storage, monkeypatch):
+def test_a_storage_outage_does_not_hide_the_stalled_jobs(session_factory, db, object_storage, caplog):
+    job_id = running_job(db, silent_for=TWO_HOURS).id
+    session_id = open_upload(db, object_storage, expired=True).id
+
+    stalled = sweep_once(session_factory, UnavailableObjectStorage)
+
+    assert [update.job_id for update in stalled] == [job_id]
+    assert "Abandoned uploads could not be removed" in caplog.text
+    db.expire_all()
+    assert db.get(UploadSession, session_id) is not None
+
+
+def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, object_storage, monkeypatch):
     monkeypatch.setenv("SWEEP_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
     job = running_job(db, silent_for=TWO_HOURS)
@@ -189,7 +199,7 @@ def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, stor
 
     async def run():
         with hub.watch(job.project_id) as updates:
-            task = asyncio.create_task(run_periodic_sweep(session_factory, storage, hub))
+            task = asyncio.create_task(run_periodic_sweep(session_factory, lambda: object_storage, hub))
             update = await asyncio.wait_for(updates.get(), 20)
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

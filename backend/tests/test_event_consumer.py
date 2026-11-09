@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import shutil
 import time
 import uuid
 from datetime import date
@@ -134,8 +133,9 @@ def status_is(session_factory, job_id, *statuses):
 
 def test_worker_events_reach_the_database_and_announce_the_ingestion(queues, session_factory, job, tmp_path, make_sample):
     storage = LocalStorage(tmp_path / "media")
+    object_storage = InMemoryObjectStorage()
     job_id, project_id, asset_id = job.id, job.project_id, job.media_asset_id
-    shutil.copy(make_sample(tone=True), storage.path(str(project_id), "source", "lecture.mp4"))
+    object_storage.objects[(str(project_id), "source/lecture.mp4")] = make_sample(tone=True).read_bytes()
     RabbitMQDispatcher(TEST_RABBITMQ_URL).dispatch(JobRequestMessage(
         job_id=job_id,
         project_id=project_id,
@@ -147,7 +147,7 @@ def test_worker_events_reach_the_database_and_announce_the_ingestion(queues, ses
     async def run_worker():
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
-            worker = IngestionWorker(TEST_RABBITMQ_URL, storage, InMemoryObjectStorage())
+            worker = IngestionWorker(TEST_RABBITMQ_URL, storage, object_storage)
             await worker.open(await connection.channel())
             await worker.process_next()
 

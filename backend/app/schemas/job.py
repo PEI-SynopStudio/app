@@ -89,9 +89,9 @@ class JobRequestMessage(BaseModel):
     project_id: UUID
     attempt: int = Field(default=FIRST_JOB_ATTEMPT, ge=FIRST_JOB_ATTEMPT)
     parameters: JobParameters
-    # Uploads only, set by the API and never by a client: the chunks to assemble, the target file name
-    # and the original name, which is kept in the technical metadata.
-    upload_id: UUID | None = None
+    # Uploads only, set by the API and never by a client: the object storage upload to join, the target
+    # file name and the original name, which is kept in the technical metadata.
+    storage_upload_id: str | None = None
     staged_file: str | None = None
     file_name: str | None = None
     requested_at: datetime = Field(default_factory=_utcnow)

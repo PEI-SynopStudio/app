@@ -112,8 +112,8 @@ def test_refused_url_leaves_no_new_asset(db, dispatcher):
 
 
 def test_upload_submission_closes_the_session(db, storage, object_storage, dispatcher):
-    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
-    upload_id, staged_file = session.id, session.staged_file
+    session = start_upload(db, object_storage, make_project(db), "Debate.mp4", 10, "video/mp4")
+    storage_upload_id, staged_file = session.storage_upload_id, session.staged_file
 
     job = submit_upload_ingestion(db, storage, object_storage, dispatcher, session)
 
@@ -121,13 +121,15 @@ def test_upload_submission_closes_the_session(db, storage, object_storage, dispa
     assert count(db, UploadSession) == 0
     assert db.get(MediaAsset, job.media_asset_id).status == MediaAssetStatus.PROCESSING
     request = dispatcher.requests[0]
-    assert (request.upload_id, request.staged_file, request.file_name) == (upload_id, staged_file, "Debate.mp4")
+    assert (request.storage_upload_id, request.staged_file, request.file_name) == (
+        storage_upload_id, staged_file, "Debate.mp4"
+    )
     assert request.parameters.media_id == job.media_asset_id
     assert db.get(MediaAsset, job.media_asset_id).source_key == f"source/{staged_file}"
 
 
 def test_upload_submission_records_the_requested_range(db, storage, object_storage, dispatcher):
-    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
+    session = start_upload(db, object_storage, make_project(db), "Debate.mp4", 10, "video/mp4")
 
     job = submit_upload_ingestion(db, storage, object_storage, dispatcher, session, "00:01:00", "00:02:00")
 
@@ -137,7 +139,7 @@ def test_upload_submission_records_the_requested_range(db, storage, object_stora
 
 
 def test_upload_survives_a_broker_failure_and_can_be_completed_again(db, storage, object_storage, dispatcher):
-    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
+    session = start_upload(db, object_storage, make_project(db), "Debate.mp4", 10, "video/mp4")
     session_id = session.id
 
     with pytest.raises(ConnectionError):
@@ -154,7 +156,7 @@ def test_upload_survives_a_broker_failure_and_can_be_completed_again(db, storage
 def test_refused_upload_keeps_the_session(db, storage, object_storage, dispatcher):
     project_id = make_project(db)
     submit_url(db, dispatcher, project_id)
-    session = start_upload(db, project_id, "Debate.mp4", 10, "video/mp4")
+    session = start_upload(db, object_storage, project_id, "Debate.mp4", 10, "video/mp4")
 
     with pytest.raises(IngestionAlreadyRunningError):
         submit_upload_ingestion(db, storage, object_storage, dispatcher, session)
@@ -250,7 +252,7 @@ def test_a_storage_failure_does_not_block_the_next_ingestion(db, storage, dispat
 def test_upload_survives_a_storage_failure_and_can_be_completed_again(db, storage, object_storage, dispatcher):
     project_id = make_project(db)
     finished_asset(db, storage, project_id)
-    session = start_upload(db, project_id, "Debate.mp4", 10, "video/mp4")
+    session = start_upload(db, object_storage, project_id, "Debate.mp4", 10, "video/mp4")
     session_id = session.id
 
     with pytest.raises(ObjectStorageError):
@@ -263,9 +265,9 @@ def test_upload_survives_a_storage_failure_and_can_be_completed_again(db, storag
     assert count(db, UploadSession) == 0
 
 
-def test_an_upload_in_progress_is_not_replaced(db, storage, dispatcher):
+def test_an_upload_in_progress_is_not_replaced(db, storage, object_storage, dispatcher):
     project_id = make_project(db)
-    start_upload(db, project_id, "Debate.mp4", 10, "video/mp4")
+    start_upload(db, object_storage, project_id, "Debate.mp4", 10, "video/mp4")
 
     submit_url(db, dispatcher, project_id, storage=storage)
 

@@ -1,5 +1,4 @@
 import logging
-from pathlib import PurePosixPath
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -11,7 +10,6 @@ from app.core.config import (
     ERROR_STORAGE_UNAVAILABLE,
     LOG_JOB_DISPATCH_FAILED,
     REPLACEABLE_ASSET_STATUSES,
-    SOURCE_DIR,
     JobErrorCodeEnum,
     MediaAssetStatus,
     SourceType,
@@ -22,7 +20,7 @@ from app.schemas.timecode import parse_time
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
-from app.services.video.uploads import close_upload
+from app.services.video.uploads import close_upload, source_key
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.jobs import create_ingestion_job, fail_job, queue_job
 
@@ -47,7 +45,7 @@ def submit_url_ingestion(
         source_type=SourceType.URL,
         source_url=url,
         status=MediaAssetStatus.PROCESSING,
-        source_key=_source_key(DOWNLOAD_FILE),
+        source_key=source_key(DOWNLOAD_FILE),
         time_start_seconds=_seconds(time_start),
         time_end_seconds=_seconds(time_end),
     )
@@ -78,7 +76,7 @@ def submit_upload_ingestion(
         db, str(session.project_id), params, session.file_name, media_asset_id=session.media_asset_id
     )
     asset = db.get(MediaAsset, session.media_asset_id)
-    asset.source_key = _source_key(session.staged_file)
+    asset.source_key = source_key(session.staged_file)
     asset.time_start_seconds, asset.time_end_seconds = _seconds(time_start), _seconds(time_end)
     asset.status = MediaAssetStatus.PROCESSING
     _replace_previous_assets(db, storage, object_storage, job)
@@ -86,7 +84,7 @@ def submit_upload_ingestion(
         job_id=job.id,
         project_id=session.project_id,
         parameters=params,
-        upload_id=session.id,
+        storage_upload_id=session.storage_upload_id,
         staged_file=session.staged_file,
         file_name=session.file_name,
     )
@@ -140,10 +138,6 @@ def _queue_and_dispatch(db: Session, dispatcher: JobDispatcher, job: Job, reques
         fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_DISPATCH_FAILED)
         raise
     return job
-
-
-def _source_key(file_name: str) -> str:
-    return PurePosixPath(SOURCE_DIR, file_name).as_posix()
 
 
 def _seconds(timecode: Optional[str]) -> Optional[float]:

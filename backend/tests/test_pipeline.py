@@ -1,12 +1,15 @@
+import io
 import json
 import shutil
 import uuid
+from pathlib import Path
 
 import pytest
 
 from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, get_settings
 from app.schemas.job import IngestionParams, JobRequestMessage
 from app.services.storage.local import LocalStorage
+from app.services.storage.object_storage import ObjectStorageError
 from app.services.video import sources as sources_module
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
@@ -25,6 +28,25 @@ SUCCESS_STEPS = [
 @pytest.fixture
 def storage(tmp_path):
     return LocalStorage(tmp_path / "media")
+
+
+class LosesConnectionOnSend(InMemoryObjectStorage):
+    def put_file(self, project_id, key, path):
+        raise ObjectStorageError("storage down")
+
+
+class FailsToDelete(InMemoryObjectStorage):
+    def delete(self, project_id, key):
+        raise ObjectStorageError("storage down")
+
+
+class RecordingDeletes(InMemoryObjectStorage):
+    def __init__(self):
+        super().__init__()
+        self.deleted = []
+
+    def delete(self, project_id, key):
+        self.deleted.append(key)
 
 
 @pytest.fixture
@@ -57,9 +79,20 @@ def url_request(project_id, url=SAMPLE_URL, **params):
     return JobRequestMessage(job_id=uuid.uuid4(), project_id=project_id, parameters=IngestionParams(source_url=url, **params))
 
 
+def with_staged_file(storage, request, object_storage=None):
+    """Return an object storage holding what stage_upload prepared on disk: the job reads its source from there."""
+    object_storage = object_storage or InMemoryObjectStorage()
+    name = request.staged_file
+    staged = storage.project_dir(str(request.project_id)) / "source" / str(name)
+    if name and Path(name).name == name and staged.is_file():
+        object_storage.objects[(str(request.project_id), f"source/{name}")] = staged.read_bytes()
+        staged.unlink()
+    return object_storage
+
+
 def run(storage, request, object_storage=None):
     events = []
-    final = run_ingestion(storage, object_storage or InMemoryObjectStorage(), request, events.append)
+    final = run_ingestion(storage, with_staged_file(storage, request, object_storage), request, events.append)
     return final, events
 
 
@@ -208,14 +241,23 @@ def test_truncated_upload_fails_before_audio_extraction(storage, project_id, mak
     assert steps(events)[-1] == JobStepProcessingEnum.INSPECTING_MEDIA
 
 
-@pytest.mark.parametrize("staged_file", [None, "missing.mp4", "../project.json", "/etc/passwd", "."])
-def test_invalid_staged_file_fails(storage, project_id, staged_file):
-    final, _ = run(storage, upload_request(project_id, staged_file))
+@pytest.mark.parametrize("staged_file", [None, "../project.json", "/etc/passwd", "."])
+def test_invalid_staged_file_fails_and_never_reaches_the_storage(storage, project_id, staged_file):
+    object_storage = RecordingDeletes()
+
+    final, _ = run(storage, upload_request(project_id, staged_file), object_storage)
 
     assert_failed(final, JobErrorCodeEnum.INVALID_SOURCE)
+    assert object_storage.deleted == []
 
 
-def test_upload_is_cut_to_the_requested_range(storage, object_storage, project_id, make_sample):
+def test_a_staged_file_missing_from_storage_fails_the_job(storage, project_id):
+    final, _ = run(storage, upload_request(project_id, "missing.mp4"))
+
+    assert_failed(final, JobErrorCodeEnum.INTERNAL_ERROR)
+
+
+def test_cut_upload_replaces_the_source_in_storage(storage, object_storage, project_id, make_sample):
     sample = make_sample(seconds=10, tone=True, gop_size=50)
 
     final, _ = run(storage, stage_upload(storage, project_id, sample, time_start="3", time_end="7"), object_storage)
@@ -224,6 +266,7 @@ def test_upload_is_cut_to_the_requested_range(storage, object_storage, project_i
     assert 0 <= final.output["time_start_seconds"] <= 3
     assert final.output["duration_seconds"] == pytest.approx(7 - final.output["time_start_seconds"], abs=0.5)
     assert [key for key in stored_keys(object_storage, project_id) if key.startswith("source/")] == ["source/lecture.mp4"]
+    assert object_storage.objects[(project_id, "source/lecture.mp4")] != sample.read_bytes()
 
 
 def test_upload_can_be_cut_with_only_an_end(storage, project_id, make_sample):
@@ -245,28 +288,16 @@ def test_upload_range_beyond_the_duration_fails(storage, project_id, make_sample
 
 def test_chunks_are_assembled_by_the_job(storage, object_storage, project_id, make_sample):
     data = make_sample(tone=True).read_bytes()
-    upload_id = uuid.uuid4()
-    for index in range(2):
-        part = data[:len(data) // 2] if index == 0 else data[len(data) // 2:]
-        storage.path(project_id, "uploads", str(upload_id), "chunks", f"{index:06d}").write_bytes(part)
-    request = upload_request(project_id, "assembled.mp4").model_copy(update={"upload_id": upload_id})
+    upload_id = object_storage.start_chunked_upload(project_id, "source/assembled.mp4")
+    object_storage.put_chunk(project_id, "source/assembled.mp4", upload_id, 0, io.BytesIO(data[:len(data) // 2]))
+    object_storage.put_chunk(project_id, "source/assembled.mp4", upload_id, 1, io.BytesIO(data[len(data) // 2:]))
+    request = upload_request(project_id, "assembled.mp4").model_copy(update={"storage_upload_id": upload_id})
 
     final, _ = run(storage, request, object_storage)
 
     assert final.status == JobStatusEnum.COMPLETED
     assert object_storage.objects[(project_id, "source/assembled.mp4")] == data
-    assert not (storage.project_dir(project_id) / "uploads" / str(upload_id)).exists()
-
-
-def test_working_files_are_removed_but_other_uploads_stay(storage, project_id, make_sample):
-    chunk = storage.path(project_id, "uploads", str(uuid.uuid4()), "chunks", "000000")
-    chunk.write_bytes(b"chunk of another upload")
-
-    final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
-
-    assert final.status == JobStatusEnum.COMPLETED
-    assert working_dirs(storage, project_id) == []
-    assert chunk.exists()
+    assert object_storage.open_uploads == {}
 
 
 def test_a_rejected_video_leaves_no_files(storage, object_storage, project_id, make_sample):
@@ -285,17 +316,43 @@ def test_working_files_are_gone_before_the_final_event(storage, project_id, make
         if event.status == status:
             dirs_at_the_end.append(working_dirs(storage, project_id))
 
-    run_ingestion(storage, InMemoryObjectStorage(), stage_upload(storage, project_id, make_sample(tone=tone)), emit)
+    request = stage_upload(storage, project_id, make_sample(tone=tone))
+    run_ingestion(storage, with_staged_file(storage, request), request, emit)
 
     assert dirs_at_the_end == [[]]
 
 
 def test_a_storage_failure_fails_the_job_and_removes_the_working_files(storage, project_id, make_sample):
-    final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)), UnavailableObjectStorage())
+    final, _ = run(storage, stage_upload(storage, project_id, make_sample(tone=True)), LosesConnectionOnSend())
 
     assert_failed(final, JobErrorCodeEnum.INTERNAL_ERROR)
     assert final.error_message == "The storage service is unavailable; please try again."
     assert working_dirs(storage, project_id) == []
+
+
+def test_a_storage_that_is_down_fails_the_job(storage, project_id):
+    final, _ = run(storage, upload_request(project_id), UnavailableObjectStorage())
+
+    assert_failed(final, JobErrorCodeEnum.INTERNAL_ERROR)
+
+
+def test_a_rejected_upload_is_discarded_from_storage(storage, object_storage, project_id):
+    upload_id = object_storage.start_chunked_upload(project_id, "source/fake.mp4")
+    object_storage.put_chunk(project_id, "source/fake.mp4", upload_id, 0, io.BytesIO(b"not a video" * 100))
+    request = upload_request(project_id, "fake.mp4").model_copy(update={"storage_upload_id": upload_id})
+
+    final, _ = run(storage, request, object_storage)
+
+    assert_failed(final, JobErrorCodeEnum.CORRUPTED_MEDIA)
+    assert object_storage.objects == {}
+    assert object_storage.open_uploads == {}
+
+
+def test_a_failed_discard_does_not_hide_why_the_upload_was_rejected(storage, project_id, make_sample, caplog):
+    final, _ = run(storage, stage_upload(storage, project_id, make_sample()), FailsToDelete())
+
+    assert_failed(final, JobErrorCodeEnum.SILENT_AUDIO)
+    assert "Could not discard" in caplog.text
 
 
 def test_sending_the_results_reports_progress(storage, project_id, make_sample, monkeypatch):
@@ -304,7 +361,7 @@ def test_sending_the_results_reports_progress(storage, project_id, make_sample, 
     _, events = run(storage, stage_upload(storage, project_id, make_sample(tone=True)))
 
     progress = [event.step_progress for event in events if event.step == JobStepProcessingEnum.PERSISTING_RESULTS]
-    assert progress == [0, 20, 40, 60, 80, 100]
+    assert progress == [0, 25, 50, 75, 100]
 
 
 def test_unexpected_error_is_recorded_and_raised(storage, project_id, make_sample, monkeypatch):
@@ -315,11 +372,12 @@ def test_unexpected_error_is_recorded_and_raised(storage, project_id, make_sampl
     events = []
 
     with pytest.raises(KeyError):
-        run_ingestion(storage, InMemoryObjectStorage(), stage_upload(storage, project_id, make_sample(tone=True)), events.append)
+        request = stage_upload(storage, project_id, make_sample(tone=True))
+        run_ingestion(storage, with_staged_file(storage, request), request, events.append)
     assert events[-1].error_code == JobErrorCodeEnum.INTERNAL_ERROR
 
 
-def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkeypatch):
+def test_url_is_downloaded_and_ingested(storage, object_storage, project_id, make_sample, monkeypatch):
     """URL flow with yt-dlp replaced by fakes (no network); test_download.py covers the real download."""
     sample = make_sample(tone=True)
     downloads = []
@@ -334,7 +392,7 @@ def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkey
     monkeypatch.setattr(ingestion_pipeline, "probe_remote_video", fake_probe)
     monkeypatch.setattr(ingestion_pipeline, "download_youtube_video", fake_download)
 
-    final, events = run(storage, url_request(project_id, time_start="10", time_end="30"))
+    final, events = run(storage, url_request(project_id, time_start="10", time_end="30"), object_storage)
 
     assert final.status == JobStatusEnum.COMPLETED
     assert steps(events) == [
@@ -342,6 +400,7 @@ def test_url_is_downloaded_and_ingested(storage, project_id, make_sample, monkey
     ]
     assert downloads == [(SAMPLE_URL, "10", "30")]
     assert (final.output["source"], final.output["source_key"]) == (SAMPLE_URL, "source/original.mp4")
+    assert "source/original.mp4" in stored_keys(object_storage, project_id)
 
 
 def test_url_from_other_domain_fails(storage, project_id):

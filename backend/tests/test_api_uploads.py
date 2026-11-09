@@ -12,7 +12,7 @@ from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
 from app.services.workflow.jobs import fail_job
 from app.services.workflow.rabbitmq import get_dispatcher
-from in_memory_object_storage import InMemoryObjectStorage
+from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
 CHUNK_SIZE = 4096
@@ -133,6 +133,25 @@ def test_start_upload_for_unknown_project_is_not_found(live):
     assert start(client, str(uuid.uuid4())).status_code == 404
 
 
+def test_a_storage_failure_when_starting_creates_nothing(live, db):
+    client, _, _ = live
+    project_id = new_project(client)
+    app.dependency_overrides[get_object_storage] = UnavailableObjectStorage
+
+    assert start(client, project_id).status_code == 503
+
+    assert db.scalar(select(MediaAsset)) is None
+
+
+def test_a_chunk_that_cannot_be_stored_is_reported(live):
+    client, _, _ = live
+    project_id = new_project(client)
+    upload_id = start(client, project_id, size_bytes=10_000).json()["upload_id"]
+    app.dependency_overrides[get_object_storage] = UnavailableObjectStorage
+
+    assert put_chunk(client, project_id, upload_id, 0, b"x" * CHUNK_SIZE).status_code == 503
+
+
 def test_chunks_are_tracked_and_can_be_resent(live):
     client, _, _ = live
     project_id = new_project(client)
@@ -182,7 +201,7 @@ def test_complete_with_missing_chunks_is_conflict(live):
     assert "2 chunk(s) missing, starting at index 1" in response.json()["detail"]
 
 
-def test_chunked_upload_is_assembled_and_ingested(live, storage, object_storage, make_sample):
+def test_chunked_upload_is_assembled_and_ingested(live, object_storage, make_sample):
     """FR02 acceptance: a chunked upload is assembled and ingested asynchronously, end to end."""
     client, dispatcher, events = live
     project_id = new_project(client)
@@ -198,7 +217,7 @@ def test_chunked_upload_is_assembled_and_ingested(live, storage, object_storage,
     assert body["job"]["status"] == "completed"
     assert body["metadata"]["source"] == "Lecture 1.mp4"
     assert object_storage.objects[(project_id, f"source/{upload_id}.mp4")] == data
-    assert not (storage.project_dir(project_id) / "uploads" / upload_id).exists()
+    assert object_storage.open_uploads == {}
     assert len(events) == 1
 
 
@@ -281,7 +300,7 @@ def test_upload_of_another_project_is_not_found(live):
     assert client.get(f"/projects/{new_project(client)}/uploads/{upload_id}").status_code == 404
 
 
-def test_complete_leaves_the_assembly_to_the_job(live, storage, db, monkeypatch):
+def test_complete_leaves_the_assembly_to_the_job(live, object_storage, db, monkeypatch):
     """Endpoints never block (FR02): a multi-GB file is not assembled inside the request."""
     client, dispatcher, _ = live
     project_id = new_project(client)
@@ -291,7 +310,7 @@ def test_complete_leaves_the_assembly_to_the_job(live, storage, db, monkeypatch)
     response = client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
 
     assert response.status_code == 202
-    assert not storage.path(project_id, "source", f"{upload_id}.mp4").exists()
-    assert (storage.project_dir(project_id) / "uploads" / upload_id / "chunks").is_dir()
+    assert object_storage.objects == {}
+    assert len(object_storage.open_uploads) == 1
     assert client.get(f"/projects/{project_id}/uploads/{upload_id}").status_code == 404
     assert db.scalar(select(MediaAsset)).status == MediaAssetStatus.PROCESSING

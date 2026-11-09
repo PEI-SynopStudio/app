@@ -12,13 +12,13 @@ from app.core.config import (
     CUT_FILE_PREFIX,
     DOWNLOAD_FILE,
     ERROR_DURATION_EXCEEDED,
-    ERROR_FILE_NOT_FOUND,
     ERROR_INTERNAL,
     ERROR_INVALID_STAGED_FILE,
     ERROR_STORAGE_UNAVAILABLE,
     JSON_DUMP_MODE,
     KEYFRAMES_FILE,
     LOG_INGESTION_FAILED,
+    LOG_UPLOAD_DISCARD_FAILED,
     PROGRESS_MAX,
     PROGRESS_EMIT_INTERVAL_SECONDS,
     PROGRESS_MIN,
@@ -54,7 +54,7 @@ from app.services.video.ingestion import (
 )
 from app.services.video.metadata import IngestionOutput, build_technical_metadata
 from app.services.video.sources import probe_remote_video, validate_time_range
-from app.services.video.uploads import assemble_chunks
+from app.services.video.uploads import source_key
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ def run_ingestion(
     The working files are removed before the final event, so nothing of the job stays outside the encrypted storage.
     """
     project_id = str(request.project_id)
+    staged_key: Optional[str] = None  # known once the name of the staged file has been checked
 
     def publish(**fields) -> JobUpdateEventSchema:
         event = JobUpdateEventSchema(job_id=request.job_id, attempt=request.attempt, **fields)
@@ -86,12 +87,16 @@ def run_ingestion(
         return _throttled(lambda percent: publish(status=JobStatusEnum.PROCESSING, step=step, step_progress=percent))
 
     def fail(code: JobErrorCodeEnum, message: str) -> JobUpdateEventSchema:
-        storage.delete_working_files(project_id)
+        storage.delete_project(project_id)
+        if staged_key is not None:
+            _discard_upload(object_storage, request, project_id, staged_key)
         return publish(status=JobStatusEnum.FAILED, step_progress=PROGRESS_MIN, error_code=code, error_message=message)
 
     try:
         advance(JobStepProcessingEnum.INITIALIZING)
-        source_path = _fetch_source(storage, request, advance)
+        if request.parameters.source_url is None:
+            staged_key = _staged_key(storage, request)
+        source_path = _fetch_source(storage, object_storage, request, staged_key, advance)
 
         advance(JobStepProcessingEnum.INSPECTING_MEDIA)
         media, scan = _inspect_source(source_path)
@@ -115,7 +120,9 @@ def run_ingestion(
 
         report = advance(JobStepProcessingEnum.PERSISTING_RESULTS)
         output = _build_output(storage, request, media, scan.is_vfr, source_path, cut_start)
-        _store_results(storage, object_storage, project_id, output, report)
+        # An upload that was not cut is already in object storage.
+        send_source = request.parameters.source_url is not None or cut_start is not None
+        _store_results(storage, object_storage, project_id, output, send_source, report)
     except (MediaRejectedError, MediaProcessingError) as exc:
         return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
@@ -130,7 +137,7 @@ def run_ingestion(
         fail(JobErrorCodeEnum.INTERNAL_ERROR, ERROR_INTERNAL)
         raise
 
-    storage.delete_working_files(project_id)
+    storage.delete_project(project_id)
     return publish(status=JobStatusEnum.COMPLETED, step_progress=PROGRESS_MAX, output=output.model_dump(mode=JSON_DUMP_MODE))
 
 
@@ -174,10 +181,34 @@ def _cut_upload(source_path: Path, start_seconds: float, end_seconds: float) -> 
     return cut.start_seconds
 
 
+def _staged_key(storage: LocalStorage, request: JobRequestMessage) -> str:
+    """Return the storage key of the upload; only a file directly inside the source directory is accepted."""
+    if not request.staged_file:
+        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
+    source_dir = storage.project_dir(str(request.project_id)) / SOURCE_DIR
+    if (source_dir / request.staged_file).resolve().parent != source_dir.resolve():
+        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
+    return source_key(request.staged_file)
+
+
+def _discard_upload(object_storage: ObjectStorage, request: JobRequestMessage, project_id: str, key: str) -> None:
+    """A rejected upload does not stay in storage; if the storage is failing too, the failure is only logged."""
+    try:
+        if request.storage_upload_id is not None:
+            object_storage.abort_chunked_upload(project_id, key, request.storage_upload_id)
+        object_storage.delete(project_id, key)
+    except ObjectStorageError:
+        logger.exception(LOG_UPLOAD_DISCARD_FAILED, project_id)
+
+
 def _fetch_source(
-    storage: LocalStorage, request: JobRequestMessage, advance: Callable[[JobStepProcessingEnum], ProgressCallback]
+    storage: LocalStorage,
+    object_storage: ObjectStorage,
+    request: JobRequestMessage,
+    staged_key: Optional[str],
+    advance: Callable[[JobStepProcessingEnum], ProgressCallback],
 ) -> Path:
-    """Return the path of the source video: download it (URL) or assemble and locate the upload."""
+    """Return the local path of the source video: download it (URL) or join and fetch the upload."""
     project_id = str(request.project_id)
     params = request.parameters
     if params.source_url is not None:
@@ -192,34 +223,30 @@ def _fetch_source(
             report,
         )
 
-    if not request.staged_file:
-        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
-    source_dir = storage.project_dir(project_id) / SOURCE_DIR
-    source_path = source_dir / request.staged_file
-    # Only a file directly inside the project's source directory is accepted (no "..", "/" or symlinks out).
-    if source_path.resolve().parent != source_dir.resolve():
-        raise ValueError(ERROR_INVALID_STAGED_FILE.format(name=request.staged_file))
-    if request.upload_id is not None:
-        assemble_chunks(storage, project_id, str(request.upload_id), request.staged_file)
-    if not source_path.is_file():
-        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=request.staged_file))
+    if request.storage_upload_id is not None:
+        object_storage.complete_chunked_upload(project_id, staged_key, request.storage_upload_id)
+    source_path = storage.path(project_id, staged_key)
+    object_storage.get_file(project_id, staged_key, source_path)
     return source_path
 
 
-# Send the source and everything derived from it to object storage.
+# Send what the job produced to object storage.
 # Source: MS2 FR02 – Step 6; architecture §2 (workers read and write object storage directly).
 def _store_results(
     storage: LocalStorage,
     object_storage: ObjectStorage,
     project_id: str,
     output: IngestionOutput,
+    send_source: bool,
     report: ProgressCallback,
 ) -> None:
     """Objects left by a job that fails halfway cause no lasting harm.
 
     The next ingestion replaces them, and deleting the project removes everything under its prefix.
     """
-    keys = (output.source_key, output.audio_key, output.proxy_key, output.waveform_key, output.keyframes_key)
+    keys = [output.audio_key, output.proxy_key, output.waveform_key, output.keyframes_key]
+    if send_source:
+        keys.insert(0, output.source_key)
     for sent, key in enumerate(keys, start=1):
         object_storage.put_file(project_id, key, storage.path(project_id, key))
         report(PROGRESS_MAX * sent / len(keys))

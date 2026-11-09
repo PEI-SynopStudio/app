@@ -9,8 +9,9 @@ import uuid
 import boto3
 import pytest
 
+from app.core.config import get_settings
 from app.services.storage import object_storage as object_storage_module
-from app.services.storage.object_storage import ObjectStorageError, S3ObjectStorage
+from app.services.storage.object_storage import ObjectStorageError, S3ObjectStorage, get_object_storage
 
 TEST_S3_ENDPOINT_URL = os.environ.get("TEST_S3_ENDPOINT_URL", "http://localhost:8333")
 TEST_S3_ACCESS_KEY = os.environ.get("TEST_S3_ACCESS_KEY", "pei")
@@ -301,6 +302,22 @@ def test_delete_project_also_discards_its_open_uploads(storage, bucket, project_
     storage.delete_project(project_id)
 
     assert open_upload_ids(bucket) == [kept]
+
+
+@pytest.mark.parametrize("variable, value", [
+    ("UPLOAD_CHUNK_SIZE_BYTES", "1024"),
+    ("MAX_UPLOAD_BYTES", str(100 * 1024**4)),
+])
+def test_a_chunk_size_outside_the_s3_limits_is_refused(monkeypatch, variable, value):
+    monkeypatch.setenv(variable, value)
+    get_settings.cache_clear()
+    get_object_storage.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="does not fit the S3 limits"):
+            get_object_storage()
+    finally:
+        get_settings.cache_clear()
+        get_object_storage.cache_clear()
 
 
 def test_wrong_credentials_are_reported(storage, bucket, project_id, tmp_path):

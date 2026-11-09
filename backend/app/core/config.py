@@ -39,7 +39,6 @@ ENV_TRUE_VALUE = "true"
 
 # --- Storage layout ---
 PROJECTS_DIR = "projects"
-TMP_SUFFIX = ".tmp"
 
 # --- Object storage: SeaweedFS through its S3 API (architecture §2) ---
 S3_SERVICE_NAME = "s3"
@@ -53,6 +52,12 @@ S3_KEY_SEPARATOR = "/"
 S3_BUCKET_EXISTS_CODES = ("BucketAlreadyOwnedByYou", "BucketAlreadyExists")
 S3_NO_SUCH_UPLOAD_CODE = "NoSuchUpload"
 S3_FIRST_PART_NUMBER = 1  # the chunks are numbered from 0, the parts of a multipart upload from 1
+# Limits of the S3 API: every part except the last must reach the minimum, or joining them fails.
+S3_MIN_PART_SIZE_BYTES = 5 * 1024**2
+S3_MAX_PARTS = 10000
+ERROR_S3_CHUNK_PLAN = (
+    "UPLOAD_CHUNK_SIZE_BYTES={size} does not fit the S3 limits: at least {minimum} bytes and at most {parts} chunks per upload."
+)
 ERROR_S3_CHUNKED_UPLOAD_FAILED = "Could not handle the chunked upload of {key!r}."
 ERROR_S3_GET_FAILED = "Could not read the object {key!r}."
 ERROR_S3_BUCKET_FAILED = "Could not create the object storage bucket {bucket!r}."
@@ -119,8 +124,6 @@ SOURCE_DIR = "source"
 AUDIO_DIR = "audio"
 PROXY_DIR = "proxy"
 ANALYSIS_DIR = "analysis"
-# What a job leaves on the local volume; the uploads directory is not here, because it holds chunks still arriving.
-WORKING_DIRS = (SOURCE_DIR, AUDIO_DIR, PROXY_DIR, ANALYSIS_DIR)
 DOWNLOAD_FILE = "original.mp4"
 AUDIO_FILE = "audio.wav"
 PROXY_FILE = "proxy.mp4"
@@ -131,6 +134,7 @@ CUT_FILE_PREFIX = "cut-"
 ERROR_CUT_FAILED = "Failed to cut the requested time range: {details}"
 ERROR_INTERNAL = "Unexpected error during ingestion; see the worker logs."
 LOG_INGESTION_FAILED = "Ingestion failed for project %s"
+LOG_UPLOAD_DISCARD_FAILED = "Could not discard the rejected upload of project %s"
 
 # --- Job dispatch and events ---
 MEDIA_INGESTED_EVENT = "media.ingested"
@@ -155,6 +159,7 @@ LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
 ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
 LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s)"
 LOG_SWEEP_FAILED = "Periodic sweep failed"
+LOG_SWEEP_PURGE_FAILED = "Abandoned uploads could not be removed"
 BROKER_CONTENT_TYPE = "application/json"
 # Below the 5 s the NFR allows for a job submission.
 BROKER_PUBLISH_TIMEOUT_SECONDS = 3.0
@@ -167,13 +172,7 @@ LOG_WORKER_INVALID_MESSAGE = "Invalid job message discarded: %s"
 LOG_WORKER_JOB_CRASHED = "Job %s crashed in the worker"
 
 # --- Chunked upload (FR02 step 1) ---
-UPLOADS_DIR = "uploads"
-UPLOAD_CHUNKS_DIR = "chunks"
-CHUNK_FILE_FORMAT = "{index:06d}"
 EXTENSION_SEPARATOR = "."
-FILE_READ_MODE = "rb"
-FILE_WRITE_MODE = "wb"
-COPY_BUFFER_BYTES = 1024**2
 # MIME types browsers report for the allowed containers; an empty type is accepted (the server inspects content).
 ALLOWED_UPLOAD_MIME_TYPES = (
     "video/mp4",
@@ -488,6 +487,7 @@ ENUM_COLUMN_LENGTH = 64
 OWNER_ID_MAX_LENGTH = 255
 PROJECT_AUTHOR_MAX_LENGTH = 300
 STORAGE_KEY_MAX_LENGTH = 1024
+STORAGE_UPLOAD_ID_MAX_LENGTH = 1024
 CONTAINER_NAME_MAX_LENGTH = 128
 CODEC_NAME_MAX_LENGTH = 64
 ASPECT_RATIO_MAX_LENGTH = 32

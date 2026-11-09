@@ -124,6 +124,7 @@ def make_upload(project, asset):
         chunk_size=4,
         total_chunks=3,
         staged_file="session.mp4",
+        storage_upload_id="storage-upload",
         expires_at=utc_now(),
     )
 

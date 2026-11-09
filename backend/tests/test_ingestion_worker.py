@@ -1,5 +1,4 @@
 import asyncio
-import shutil
 import uuid
 
 import aio_pika
@@ -20,6 +19,11 @@ from test_rabbitmq import TEST_RABBITMQ_URL, broker_is_running
 @pytest.fixture
 def storage(tmp_path):
     return LocalStorage(tmp_path / "media")
+
+
+@pytest.fixture
+def object_storage():
+    return InMemoryObjectStorage()
 
 
 @pytest.fixture
@@ -88,10 +92,10 @@ def publish_raw(queue_name, body):
     asyncio.run(publish())
 
 
-def stage_job(storage, sample):
-    """Publish an upload job whose file is already in the project's source directory."""
+def stage_job(object_storage, sample):
+    """Publish an upload job whose file is already in object storage."""
     project_id = uuid.uuid4()
-    shutil.copy(sample, storage.path(str(project_id), "source", "lecture.mp4"))
+    object_storage.objects[(str(project_id), "source/lecture.mp4")] = sample.read_bytes()
     request = JobRequestMessage(
         job_id=uuid.uuid4(),
         project_id=project_id,
@@ -107,10 +111,9 @@ def events_in(queue_name):
     return [JobUpdateEventSchema.model_validate_json(body) for body in read_all(queue_name)]
 
 
-def test_worker_runs_the_job_and_publishes_its_events(queues, storage, make_sample):
+def test_worker_runs_the_job_and_publishes_its_events(queues, storage, object_storage, make_sample):
     jobs_queue, events_queue = queues
-    request = stage_job(storage, make_sample(tone=True))
-    object_storage = InMemoryObjectStorage()
+    request = stage_job(object_storage, make_sample(tone=True))
 
     assert process_next(storage, object_storage) is True
 
@@ -127,23 +130,23 @@ def test_empty_queue_returns_false(queues, storage):
     assert process_next(storage) is False
 
 
-def test_rejected_media_is_reported_as_a_failed_event(queues, storage, make_sample):
+def test_rejected_media_is_reported_as_a_failed_event(queues, storage, object_storage, make_sample):
     _, events_queue = queues
-    stage_job(storage, make_sample())  # silent audio
+    stage_job(object_storage, make_sample())  # silent audio
 
-    process_next(storage)
+    process_next(storage, object_storage)
 
     final = events_in(events_queue)[-1]
     assert (final.status, final.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.SILENT_AUDIO)
 
 
-def test_worker_takes_one_job_at_a_time(queues, storage, make_sample):
+def test_worker_takes_one_job_at_a_time(queues, storage, object_storage, make_sample):
     jobs_queue, _ = queues
     sample = make_sample(tone=True)
-    stage_job(storage, sample)
-    stage_job(storage, sample)
+    stage_job(object_storage, sample)
+    stage_job(object_storage, sample)
 
-    process_next(storage)
+    process_next(storage, object_storage)
 
     assert len(read_all(jobs_queue)) == 1
 
@@ -192,12 +195,12 @@ def test_event_gives_up_when_the_broker_stays_down(monkeypatch):
         emit_with_failures(monkeypatch, failures=1000)
 
 
-def test_crashed_job_is_not_delivered_again(queues, storage, make_sample, monkeypatch, caplog):
+def test_crashed_job_is_not_delivered_again(queues, storage, object_storage, make_sample, monkeypatch, caplog):
     def crash(storage, object_storage, request, emit):
         raise KeyError("bug")
 
     monkeypatch.setattr(ingestion_worker, "run_ingestion", crash)
-    stage_job(storage, make_sample(tone=True))
+    stage_job(object_storage, make_sample(tone=True))
 
     assert process_next(storage) is True
     assert process_next(storage) is False

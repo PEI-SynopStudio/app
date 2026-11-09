@@ -14,6 +14,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import (
     ERROR_INVALID_PROJECT_ID,
     ERROR_S3_BUCKET_FAILED,
+    ERROR_S3_CHUNK_PLAN,
     ERROR_S3_CHUNKED_UPLOAD_FAILED,
     ERROR_S3_DELETE_FAILED,
     ERROR_S3_DELETE_PROJECT_FAILED,
@@ -25,6 +26,8 @@ from app.core.config import (
     S3_FIRST_PART_NUMBER,
     S3_KEY_SEPARATOR,
     S3_MAX_ATTEMPTS,
+    S3_MAX_PARTS,
+    S3_MIN_PART_SIZE_BYTES,
     S3_NO_SUCH_UPLOAD_CODE,
     S3_REGION,
     S3_RETRY_MODE,
@@ -210,7 +213,11 @@ class S3ObjectStorage(ObjectStorage):
 
 @lru_cache
 def get_object_storage() -> S3ObjectStorage:
+    """Refuses a chunk size the S3 API cannot join, instead of failing only after a whole upload has arrived."""
     settings = get_settings()
+    size = settings.upload_chunk_size_bytes
+    if size < S3_MIN_PART_SIZE_BYTES or settings.max_upload_bytes / size > S3_MAX_PARTS:
+        raise ValueError(ERROR_S3_CHUNK_PLAN.format(size=size, minimum=S3_MIN_PART_SIZE_BYTES, parts=S3_MAX_PARTS))
     storage = S3ObjectStorage(
         settings.s3_endpoint_url,
         settings.s3_access_key,

@@ -7,9 +7,11 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.database.base import utc_now
+from test_models import make_asset, make_project
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 INSERT_ENTRY = text(
@@ -37,6 +39,12 @@ def engine(alembic_config, database_url):
     instance.dispose()
 
 
+INSERT_UPLOAD_AT_0003 = text(
+    "INSERT INTO upload_sessions (id, project_id, media_asset_id, file_name, size_bytes, chunk_size, total_chunks, "
+    "staged_file, expires_at, created_at) VALUES (:id, :project_id, :asset_id, 'a.mp4', 10, 4, 3, 'a.mp4', :now, :now)"
+)
+
+
 def insert_entry(engine, age=timedelta()):
     entry_id = str(uuid.uuid4())
     with engine.begin() as connection:
@@ -46,6 +54,26 @@ def insert_entry(engine, age=timedelta()):
 
 def test_migrations_match_the_models(alembic_config):
     command.check(alembic_config)
+
+
+def test_uploads_in_progress_are_discarded_when_the_chunks_move_to_object_storage(alembic_config, engine):
+    command.downgrade(alembic_config, "0003")
+    with Session(engine) as db:
+        project = make_project()
+        asset = make_asset(project)
+        db.add_all([project, asset])
+        db.commit()
+        db.execute(INSERT_UPLOAD_AT_0003, {
+            "id": str(uuid.uuid4()), "project_id": str(project.id), "asset_id": str(asset.id), "now": utc_now()
+        })
+        db.commit()
+
+    command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM upload_sessions")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM media_assets")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM projects")) == 1
 
 
 def test_the_database_refuses_to_change_an_audit_entry(engine):
