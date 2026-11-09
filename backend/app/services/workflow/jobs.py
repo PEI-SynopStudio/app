@@ -1,6 +1,7 @@
 import logging
 import uuid
 from dataclasses import fields
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import select
@@ -13,6 +14,7 @@ from app.core.config import (
     ERROR_INGESTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
     ERROR_JOB_INTERRUPTED,
+    ERROR_JOB_STALLED,
     JOB_ACTIVE_INGESTION_INDEX,
     JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
@@ -22,7 +24,9 @@ from app.core.config import (
     AuditAction,
     JobErrorCodeEnum,
     JobStatusEnum,
+    JobStepProcessingEnum,
     JobTypeEnum,
+    get_settings,
 )
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
@@ -133,6 +137,29 @@ def fail_interrupted_jobs(db: Session) -> int:
     if jobs:
         logger.warning(LOG_JOBS_INTERRUPTED, len(jobs))
     return len(jobs)
+
+
+# Fail the running jobs whose worker went silent, so they do not block their projects forever.
+# Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (periodic sweep, no retries).
+def sweep_stalled_jobs(db: Session) -> int:
+    """Only running jobs: a queued job is just waiting for a free worker. Returns how many jobs were failed."""
+    failed = 0
+    for job_id in db.scalars(select(Job.id).where(Job.status == JobStatusEnum.PROCESSING)).all():
+        # Locked and read again, so an event that arrives in the meantime is not overwritten.
+        job = db.get(Job, job_id, with_for_update=True, populate_existing=True)
+        if job is not None and job.status == JobStatusEnum.PROCESSING and _has_stalled(job):
+            fail_job(db, job, JobErrorCodeEnum.TIMEOUT, ERROR_JOB_STALLED)
+            failed += 1
+        else:
+            db.commit()
+    return failed
+
+
+def _has_stalled(job: Job) -> bool:
+    settings = get_settings()
+    downloading = job.step == JobStepProcessingEnum.DOWNLOADING_MEDIA
+    limit = settings.job_download_stalled_after_seconds if downloading else settings.job_stalled_after_seconds
+    return utc_now() - (job.last_event_at or job.updated_at) > timedelta(seconds=limit)
 
 
 def _change_status(

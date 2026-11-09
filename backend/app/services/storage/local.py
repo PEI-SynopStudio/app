@@ -2,7 +2,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from app.core.config import ERROR_INVALID_PROJECT_ID, PROJECTS_DIR, get_settings
+from app.core.config import ERROR_INVALID_PROJECT_ID, PROJECTS_DIR, UPLOADS_DIR, get_settings
 
 
 class LocalStorage:
@@ -32,6 +32,10 @@ class LocalStorage:
     def delete(self, project_id: str, key: str) -> None:
         """Remove a file of the project if it exists; `key` is relative to the project directory."""
         (self.project_dir(project_id) / key).unlink(missing_ok=True)
+
+    def delete_upload(self, project_id: str, upload_id: str) -> None:
+        """Remove the chunks of an upload that was never completed."""
+        shutil.rmtree(self.project_dir(project_id) / UPLOADS_DIR / upload_id, ignore_errors=True)
 
     def delete_project(self, project_id: str) -> None:
         """Remove every file of the project (US34)."""

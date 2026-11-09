@@ -17,6 +17,10 @@ DEFAULT_MAX_DURATION_SECONDS = 4 * 3600
 DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024**3
 DEFAULT_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024**2
 DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 7 * 24 * 3600
+DEFAULT_SWEEP_INTERVAL_SECONDS = 60
+DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
+# A download of a time range reports no progress, and a 4 h range can take as long as the video itself.
+DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
@@ -112,6 +116,9 @@ LOG_EVENT_CONSUMER_UNAVAILABLE = "Job event consumer cannot reach the broker or 
 LOG_EVENT_INVALID = "Invalid job event discarded: %s"
 LOG_EVENT_UNKNOWN_JOB = "Event for unknown job %s discarded"
 LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
+ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
+LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s)"
+LOG_SWEEP_FAILED = "Periodic sweep failed"
 BROKER_CONTENT_TYPE = "application/json"
 # Below the 5 s the NFR allows for a job submission.
 BROKER_PUBLISH_TIMEOUT_SECONDS = 3.0
@@ -518,6 +525,9 @@ class Settings:
     max_upload_bytes: int
     upload_chunk_size_bytes: int
     upload_session_ttl_seconds: int
+    sweep_interval_seconds: int
+    job_stalled_after_seconds: int
+    job_download_stalled_after_seconds: int
     log_level: str
     whisper_model: str
     default_language: str
@@ -539,6 +549,11 @@ def get_settings() -> Settings:
         max_upload_bytes=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES)),
         upload_chunk_size_bytes=int(os.environ.get("UPLOAD_CHUNK_SIZE_BYTES", DEFAULT_UPLOAD_CHUNK_SIZE_BYTES)),
         upload_session_ttl_seconds=int(os.environ.get("UPLOAD_SESSION_TTL_SECONDS", DEFAULT_UPLOAD_SESSION_TTL_SECONDS)),
+        sweep_interval_seconds=int(os.environ.get("SWEEP_INTERVAL_SECONDS", DEFAULT_SWEEP_INTERVAL_SECONDS)),
+        job_stalled_after_seconds=int(os.environ.get("JOB_STALLED_AFTER_SECONDS", DEFAULT_JOB_STALLED_AFTER_SECONDS)),
+        job_download_stalled_after_seconds=int(
+            os.environ.get("JOB_DOWNLOAD_STALLED_AFTER_SECONDS", DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS)
+        ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),

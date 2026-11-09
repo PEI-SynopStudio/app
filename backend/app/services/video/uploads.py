@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import (
@@ -160,6 +161,18 @@ def assemble_chunks(storage: LocalStorage, project_id: str, upload_id: str, stag
             chunk.unlink()
     shutil.rmtree(upload_dir, ignore_errors=True)
     return target
+
+
+# Remove the chunks and the records of the uploads that were started but never completed.
+# Source: MS2 FR02 – Step 1 (chunked upload); the session expiry set when the upload starts.
+def purge_expired_uploads(db: Session, storage: LocalStorage) -> int:
+    """Returns how many uploads were removed; deleting the media asset also removes its session (database cascade)."""
+    sessions = db.scalars(select(UploadSession).where(UploadSession.expires_at < utc_now())).all()
+    for session in sessions:
+        storage.delete_upload(str(session.project_id), str(session.id))
+        db.delete(db.get(MediaAsset, session.media_asset_id))
+        db.commit()
+    return len(sessions)
 
 
 def _check_declared_file(file_name: str, size_bytes: int, content_type: Optional[str]) -> str:
