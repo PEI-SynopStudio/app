@@ -104,6 +104,14 @@ JOBS_QUEUE_FORMAT = "jobs.{job_type}"
 JOB_EVENTS_EXCHANGE = "job_events"
 JOB_EVENTS_QUEUE = "jobs.events"
 JOB_EVENTS_ROUTING_KEY = "job.update"
+MEDIA_EVENTS_EXCHANGE = "media_events"
+MEDIA_INGESTED_QUEUE = "media.ingested"
+EVENT_CONSUMER_PREFETCH = 1
+EVENT_CONSUMER_RETRY_SECONDS = 5.0
+LOG_EVENT_CONSUMER_UNAVAILABLE = "Job event consumer cannot reach the broker or the database, retrying: %s"
+LOG_EVENT_INVALID = "Invalid job event discarded: %s"
+LOG_EVENT_UNKNOWN_JOB = "Event for unknown job %s discarded"
+LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
 BROKER_CONTENT_TYPE = "application/json"
 # Below the 5 s the NFR allows for a job submission.
 BROKER_PUBLISH_TIMEOUT_SECONDS = 3.0

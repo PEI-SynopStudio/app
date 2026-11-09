@@ -1,11 +1,13 @@
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
 from app.api import ingestion, jobs, projects, uploads
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
 from app.database.session import get_session_factory
+from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.jobs import fail_interrupted_jobs
 
 
@@ -23,7 +25,11 @@ def _configure_logging() -> None:
 async def _lifespan(_: FastAPI):
     with get_session_factory()() as db:
         fail_interrupted_jobs(db)
+    consumer = asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory()).run())
     yield
+    consumer.cancel()
+    with suppress(asyncio.CancelledError):
+        await consumer
 
 
 _configure_logging()

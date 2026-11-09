@@ -15,6 +15,9 @@ from app.core.config import (
     JOB_EVENTS_ROUTING_KEY,
     JOBS_EXCHANGE,
     JOBS_QUEUE_FORMAT,
+    MEDIA_EVENTS_EXCHANGE,
+    MEDIA_INGESTED_EVENT,
+    MEDIA_INGESTED_QUEUE,
 )
 from app.core.exceptions import JobDispatchError
 from app.schemas.job import JobRequestMessage
@@ -29,11 +32,19 @@ async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[Ab
     return exchange, queue
 
 
-async def declare_event_exchange(channel: AbstractChannel) -> AbstractExchange:
+async def declare_event_queue(channel: AbstractChannel) -> Tuple[AbstractExchange, AbstractQueue]:
     """Worker to backend; the queue keeps the events while the backend is not reading them."""
     exchange = await channel.declare_exchange(JOB_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
     queue = await channel.declare_queue(JOB_EVENTS_QUEUE, durable=True)
     await queue.bind(exchange, JOB_EVENTS_ROUTING_KEY)
+    return exchange, queue
+
+
+async def declare_media_events_exchange(channel: AbstractChannel) -> AbstractExchange:
+    """The queue keeps media.ingested until the transcription worker exists and reads it (FR04, FR05)."""
+    exchange = await channel.declare_exchange(MEDIA_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
+    queue = await channel.declare_queue(MEDIA_INGESTED_QUEUE, durable=True)
+    await queue.bind(exchange, MEDIA_INGESTED_EVENT)
     return exchange
 
 

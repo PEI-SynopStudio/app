@@ -186,7 +186,8 @@ def test_scan_packets_rejects_missing_file(tmp_path):
 def test_truncated_file_is_rejected(make_sample, extension, video_codec, audio_codec):
     scan = scan_packets(truncate(make_sample(extension, video_codec, audio_codec, seconds=8)))
 
-    with pytest.raises(MediaRejectedError, match="incomplete") as error:
+    # Depending on where the cut falls, FFmpeg also flags the last packet as corrupted; both reasons reject the file.
+    with pytest.raises(MediaRejectedError) as error:
         check_packet_integrity(scan)
     assert error.value.code == JobErrorCodeEnum.CORRUPTED_MEDIA
 

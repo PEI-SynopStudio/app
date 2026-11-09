@@ -190,7 +190,6 @@ def test_truncated_upload_fails_before_audio_extraction(storage, project_id, mak
     final, events = run(storage, stage_upload(storage, project_id, sample, "lecture.mkv"))
 
     assert_failed(final, JobErrorCodeEnum.CORRUPTED_MEDIA)
-    assert "incomplete" in final.error_message
     assert steps(events)[-1] == JobStepProcessingEnum.INSPECTING_MEDIA
 
 

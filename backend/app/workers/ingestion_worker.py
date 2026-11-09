@@ -24,7 +24,7 @@ from app.core.config import (
 from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.workflow.ingestion_pipeline import run_ingestion
-from app.services.workflow.rabbitmq import declare_event_exchange, declare_job_queue
+from app.services.workflow.rabbitmq import declare_event_queue, declare_job_queue
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class IngestionWorker:
 
     async def open(self, channel: AbstractChannel) -> None:
         self._loop = asyncio.get_running_loop()
-        self._events = await declare_event_exchange(channel)
+        self._events, _ = await declare_event_queue(channel)
         _, self._queue = await declare_job_queue(channel, JobTypeEnum.INGESTION.value)
 
     async def process_next(self) -> bool:
