@@ -1,4 +1,6 @@
+import io
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -15,6 +17,7 @@ TEST_S3_ACCESS_KEY = os.environ.get("TEST_S3_ACCESS_KEY", "pei")
 TEST_S3_SECRET_KEY = os.environ.get("TEST_S3_SECRET_KEY", "pei")
 UNREACHABLE_ENDPOINT = "http://127.0.0.1:1"
 MULTIPART_SIZE_BYTES = 9 * 1024**2  # above the 8 MiB from which boto3 switches to a multipart upload
+MIN_CHUNK_SIZE_BYTES = 5 * 1024**2  # the S3 API refuses smaller parts, except the last
 
 
 def seaweedfs_is_running():
@@ -43,6 +46,8 @@ def bucket():
     name = f"pei-test-{uuid.uuid4().hex}"
     yield name
     client = direct_client()
+    for upload in client.list_multipart_uploads(Bucket=name).get("Uploads", []):
+        client.abort_multipart_upload(Bucket=name, Key=upload["Key"], UploadId=upload["UploadId"])
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=name):
         for item in page.get("Contents", []):
             client.delete_object(Bucket=name, Key=item["Key"])
@@ -203,6 +208,99 @@ def test_signed_url_uses_the_public_address(project_id):
     assert store.signed_url(project_id, "proxy/proxy.mp4", "video/mp4", 60).startswith(
         f"https://media.example.org/bucket/projects/{project_id}/proxy/proxy.mp4?"
     )
+
+
+def open_upload_ids(bucket):
+    return [upload["UploadId"] for upload in direct_client().list_multipart_uploads(Bucket=bucket).get("Uploads", [])]
+
+
+def test_get_file_copies_a_large_object_to_disk(storage, project_id, tmp_path):
+    data = os.urandom(MULTIPART_SIZE_BYTES)
+    storage.put_file(project_id, "source/lecture.mp4", local_file(tmp_path, data))
+
+    storage.get_file(project_id, "source/lecture.mp4", tmp_path / "copy.mp4")
+
+    assert (tmp_path / "copy.mp4").read_bytes() == data
+
+
+def test_get_file_reports_a_missing_object(storage, project_id, tmp_path):
+    with pytest.raises(ObjectStorageError):
+        storage.get_file(project_id, "source/missing.mp4", tmp_path / "copy.mp4")
+
+
+def test_chunks_sent_out_of_order_are_joined_in_order(storage, bucket, project_id):
+    first, second = b"1" * MIN_CHUNK_SIZE_BYTES, b"2" * MIN_CHUNK_SIZE_BYTES
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 2, io.BytesIO(b"last"))
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(first))
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 1, io.BytesIO(second))
+
+    storage.complete_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+
+    assert read_object(bucket, project_id, "source/lecture.mp4") == first + second + b"last"
+    assert open_upload_ids(bucket) == []
+
+
+def test_a_small_chunk_that_is_not_the_last_is_refused(storage, project_id):
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(b"too small"))
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 1, io.BytesIO(b"last"))
+
+    with pytest.raises(ObjectStorageError):
+        storage.complete_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+
+
+def test_received_chunks_lists_only_what_arrived(storage, project_id):
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    assert storage.received_chunks(project_id, "source/lecture.mp4", upload_id) == set()
+
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(b"a"))
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 3, io.BytesIO(b"b"))
+
+    assert storage.received_chunks(project_id, "source/lecture.mp4", upload_id) == {0, 3}
+
+
+def test_sending_a_chunk_again_replaces_it(storage, bucket, project_id):
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(b"old-old-old"))
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(b"new"))
+
+    storage.complete_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+
+    assert read_object(bucket, project_id, "source/lecture.mp4") == b"new"
+
+
+def test_a_chunk_can_come_from_an_uploaded_temporary_file(storage, bucket, project_id):
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    with tempfile.SpooledTemporaryFile(max_size=1) as chunk:
+        chunk.write(b"spooled to disk, as FastAPI does")
+        chunk.seek(0)
+        storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, chunk)
+
+    storage.complete_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+
+    assert read_object(bucket, project_id, "source/lecture.mp4") == b"spooled to disk, as FastAPI does"
+
+
+def test_abort_discards_the_chunks_and_can_be_repeated(storage, bucket, project_id):
+    upload_id = storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    storage.put_chunk(project_id, "source/lecture.mp4", upload_id, 0, io.BytesIO(b"a"))
+
+    storage.abort_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+    storage.abort_chunked_upload(project_id, "source/lecture.mp4", upload_id)
+
+    assert open_upload_ids(bucket) == []
+    assert object_keys(bucket) == []
+
+
+def test_delete_project_also_discards_its_open_uploads(storage, bucket, project_id):
+    other_project = str(uuid.uuid4())
+    storage.start_chunked_upload(project_id, "source/lecture.mp4")
+    kept = storage.start_chunked_upload(other_project, "source/lecture.mp4")
+
+    storage.delete_project(project_id)
+
+    assert open_upload_ids(bucket) == [kept]
 
 
 def test_wrong_credentials_are_reported(storage, bucket, project_id, tmp_path):

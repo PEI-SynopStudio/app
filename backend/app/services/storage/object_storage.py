@@ -1,9 +1,10 @@
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import BinaryIO, Dict, List, Optional, Set
 
 import boto3
 from boto3.exceptions import S3UploadFailedError
@@ -13,14 +14,18 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import (
     ERROR_INVALID_PROJECT_ID,
     ERROR_S3_BUCKET_FAILED,
+    ERROR_S3_CHUNKED_UPLOAD_FAILED,
     ERROR_S3_DELETE_FAILED,
     ERROR_S3_DELETE_PROJECT_FAILED,
+    ERROR_S3_GET_FAILED,
     ERROR_S3_PUT_FAILED,
     PROJECTS_DIR,
     S3_ADDRESSING_STYLE,
     S3_BUCKET_EXISTS_CODES,
+    S3_FIRST_PART_NUMBER,
     S3_KEY_SEPARATOR,
     S3_MAX_ATTEMPTS,
+    S3_NO_SUCH_UPLOAD_CODE,
     S3_REGION,
     S3_RETRY_MODE,
     S3_SERVICE_NAME,
@@ -53,6 +58,30 @@ class ObjectStorage(ABC):
     @abstractmethod
     def delete_project(self, project_id: str) -> None:
         """Remove every object of the project (US34)."""
+
+    @abstractmethod
+    def get_file(self, project_id: str, key: str, path: Path) -> None:
+        """Copy an object to a local file."""
+
+    @abstractmethod
+    def start_chunked_upload(self, project_id: str, key: str) -> str:
+        """Open an upload that arrives in chunks; returns the ID its chunks refer to."""
+
+    @abstractmethod
+    def put_chunk(self, project_id: str, key: str, upload_id: str, index: int, data: BinaryIO) -> None:
+        """Store one chunk, numbered from 0; sending the same index again replaces it."""
+
+    @abstractmethod
+    def received_chunks(self, project_id: str, key: str, upload_id: str) -> Set[int]:
+        """Return the indexes of the chunks stored so far."""
+
+    @abstractmethod
+    def complete_chunked_upload(self, project_id: str, key: str, upload_id: str) -> None:
+        """Join the chunks, in order, into the object with that key."""
+
+    @abstractmethod
+    def abort_chunked_upload(self, project_id: str, key: str, upload_id: str) -> None:
+        """Discard the chunks of an upload; an upload that no longer exists is not an error."""
 
     @abstractmethod
     def signed_url(self, project_id: str, key: str, content_type: str, expires_in_seconds: int) -> str:
@@ -98,16 +127,77 @@ class S3ObjectStorage(ObjectStorage):
             self._client.delete_object(Bucket=self._bucket, Key=object_key)
 
     def delete_project(self, project_id: str) -> None:
-        """Raises if any object could not be deleted: the S3 API reports those inside a successful response."""
+        """Also discards uploads still open, whose chunks are not listed as objects.
+
+        Raises if any object could not be deleted: the S3 API reports those inside a successful response.
+        """
         prefix = _project_prefix(project_id)
         message = ERROR_S3_DELETE_PROJECT_FAILED.format(project_id=project_id)
         with _translate_errors(message):
+            for page in self._client.get_paginator("list_multipart_uploads").paginate(Bucket=self._bucket, Prefix=prefix):
+                for upload in page.get("Uploads", []):
+                    self._client.abort_multipart_upload(
+                        Bucket=self._bucket, Key=upload["Key"], UploadId=upload["UploadId"]
+                    )
             for page in self._client.get_paginator("list_objects_v2").paginate(Bucket=self._bucket, Prefix=prefix):
                 objects = [{"Key": item["Key"]} for item in page.get("Contents", [])]
                 if objects:
                     response = self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": objects})
                     if response.get("Errors"):
                         raise ObjectStorageError(message)
+
+    def get_file(self, project_id: str, key: str, path: Path) -> None:
+        """Streams to disk, so a large object is never held in memory."""
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_GET_FAILED.format(key=object_key)):
+            self._client.download_file(self._bucket, object_key, str(path))
+
+    def start_chunked_upload(self, project_id: str, key: str) -> str:
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_CHUNKED_UPLOAD_FAILED.format(key=object_key)):
+            return self._client.create_multipart_upload(Bucket=self._bucket, Key=object_key)["UploadId"]
+
+    def put_chunk(self, project_id: str, key: str, upload_id: str, index: int, data: BinaryIO) -> None:
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_CHUNKED_UPLOAD_FAILED.format(key=object_key)):
+            self._client.upload_part(
+                Bucket=self._bucket,
+                Key=object_key,
+                UploadId=upload_id,
+                PartNumber=index + S3_FIRST_PART_NUMBER,
+                Body=data,
+            )
+
+    def received_chunks(self, project_id: str, key: str, upload_id: str) -> Set[int]:
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_CHUNKED_UPLOAD_FAILED.format(key=object_key)):
+            return {part["PartNumber"] - S3_FIRST_PART_NUMBER for part in self._parts(object_key, upload_id)}
+
+    def complete_chunked_upload(self, project_id: str, key: str, upload_id: str) -> None:
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_CHUNKED_UPLOAD_FAILED.format(key=object_key)):
+            parts = sorted(self._parts(object_key, upload_id), key=lambda part: part["PartNumber"])
+            self._client.complete_multipart_upload(
+                Bucket=self._bucket,
+                Key=object_key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": [{"PartNumber": part["PartNumber"], "ETag": part["ETag"]} for part in parts]},
+            )
+
+    def abort_chunked_upload(self, project_id: str, key: str, upload_id: str) -> None:
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_CHUNKED_UPLOAD_FAILED.format(key=object_key)):
+            try:
+                self._client.abort_multipart_upload(Bucket=self._bucket, Key=object_key, UploadId=upload_id)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != S3_NO_SUCH_UPLOAD_CODE:
+                    raise
+
+    def _parts(self, object_key: str, upload_id: str) -> List[Dict]:
+        pages = self._client.get_paginator("list_parts").paginate(
+            Bucket=self._bucket, Key=object_key, UploadId=upload_id
+        )
+        return [part for page in pages for part in page.get("Parts", [])]
 
     def signed_url(self, project_id: str, key: str, content_type: str, expires_in_seconds: int) -> str:
         """Signed locally, without a request to the storage service."""
@@ -149,7 +239,7 @@ def _s3_client(endpoint_url: str, access_key: str, secret_key: str):
 
 
 @contextmanager
-def _translate_errors(message: str) -> Iterator[None]:
+def _translate_errors(message: str) -> Generator[None, None, None]:
     try:
         yield
     except _S3_ERRORS as exc:

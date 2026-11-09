@@ -1,9 +1,10 @@
 import asyncio
 import uuid
 from collections import defaultdict
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import lru_cache
-from typing import Dict, Iterator, Set
+from typing import Dict, Set
 
 from app.core.config import PROGRESS_QUEUE_SIZE
 from app.schemas.job import JobStatusResponseSchema
@@ -19,7 +20,7 @@ class JobProgressHub:
         self._watchers: Dict[uuid.UUID, Set[asyncio.Queue]] = defaultdict(set)
 
     @contextmanager
-    def watch(self, project_id: uuid.UUID) -> Iterator[asyncio.Queue]:
+    def watch(self, project_id: uuid.UUID) -> Generator[asyncio.Queue, None, None]:
         updates: asyncio.Queue = asyncio.Queue(maxsize=PROGRESS_QUEUE_SIZE)
         self._watchers[project_id].add(updates)
         try:
