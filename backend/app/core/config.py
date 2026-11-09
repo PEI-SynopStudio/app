@@ -101,9 +101,19 @@ ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 # --- RabbitMQ: one durable queue per job type, bound to the jobs exchange (architecture §2) ---
 JOBS_EXCHANGE = "jobs"
 JOBS_QUEUE_FORMAT = "jobs.{job_type}"
+JOB_EVENTS_EXCHANGE = "job_events"
+JOB_EVENTS_QUEUE = "jobs.events"
+JOB_EVENTS_ROUTING_KEY = "job.update"
 BROKER_CONTENT_TYPE = "application/json"
 # Below the 5 s the NFR allows for a job submission.
 BROKER_PUBLISH_TIMEOUT_SECONDS = 3.0
+WORKER_POLL_INTERVAL_SECONDS = 1.0
+# Long enough for the broker to restart; after that the job is abandoned and the sweep marks it as timeout.
+WORKER_EVENT_RETRY_SECONDS = 60.0
+WORKER_EVENT_RETRY_INTERVAL_SECONDS = 1.0
+LOG_WORKER_BROKER_UNAVAILABLE = "Broker unavailable, retrying: %s"
+LOG_WORKER_INVALID_MESSAGE = "Invalid job message discarded: %s"
+LOG_WORKER_JOB_CRASHED = "Job %s crashed in the worker"
 
 # --- Chunked upload (FR02 step 1) ---
 UPLOADS_DIR = "uploads"

@@ -1,18 +1,40 @@
 import asyncio
 
+from typing import Tuple
+
 import aio_pika
+from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractQueue
 from aio_pika.exceptions import AMQPError
 
 from app.core.config import (
     BROKER_CONTENT_TYPE,
     BROKER_PUBLISH_TIMEOUT_SECONDS,
     ERROR_JOB_DISPATCH_FAILED,
+    JOB_EVENTS_EXCHANGE,
+    JOB_EVENTS_QUEUE,
+    JOB_EVENTS_ROUTING_KEY,
     JOBS_EXCHANGE,
     JOBS_QUEUE_FORMAT,
 )
 from app.core.exceptions import JobDispatchError
 from app.schemas.job import JobRequestMessage
 from app.services.workflow.dispatcher import JobDispatcher
+
+
+async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[AbstractExchange, AbstractQueue]:
+    """Declared by both sides, so a job published before its worker starts waits in the queue."""
+    exchange = await channel.declare_exchange(JOBS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
+    queue = await channel.declare_queue(JOBS_QUEUE_FORMAT.format(job_type=job_type), durable=True)
+    await queue.bind(exchange, job_type)
+    return exchange, queue
+
+
+async def declare_event_exchange(channel: AbstractChannel) -> AbstractExchange:
+    """Worker to backend; the queue keeps the events while the backend is not reading them."""
+    exchange = await channel.declare_exchange(JOB_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
+    queue = await channel.declare_queue(JOB_EVENTS_QUEUE, durable=True)
+    await queue.bind(exchange, JOB_EVENTS_ROUTING_KEY)
+    return exchange
 
 
 # Publish each job to the durable jobs exchange, with its type as the routing key.
@@ -34,11 +56,7 @@ class RabbitMQDispatcher(JobDispatcher):
         job_type = request.parameters.job_type
         connection = await aio_pika.connect(self._url)
         async with connection:
-            channel = await connection.channel()
-            exchange = await channel.declare_exchange(JOBS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
-            # Declared here as well, so a job published before its worker starts waits in the queue.
-            queue = await channel.declare_queue(JOBS_QUEUE_FORMAT.format(job_type=job_type), durable=True)
-            await queue.bind(exchange, job_type)
+            exchange, _ = await declare_job_queue(await connection.channel(), job_type)
             message = aio_pika.Message(
                 body=request.model_dump_json().encode(),
                 content_type=BROKER_CONTENT_TYPE,

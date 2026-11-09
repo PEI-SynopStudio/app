@@ -25,6 +25,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  ingestion-worker:
+    build: ./backend
+    environment:
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://pei:pei@rabbitmq:5672/}
+    volumes:
+      - ./backend:/app
+      - media_data:/data/media
+    command: python -m app.workers.ingestion_worker
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
