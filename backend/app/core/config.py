@@ -108,6 +108,8 @@ SOURCE_DIR = "source"
 AUDIO_DIR = "audio"
 PROXY_DIR = "proxy"
 ANALYSIS_DIR = "analysis"
+# What a job leaves on the local volume; the uploads directory is not here, because it holds chunks still arriving.
+WORKING_DIRS = (SOURCE_DIR, AUDIO_DIR, PROXY_DIR, ANALYSIS_DIR)
 DOWNLOAD_FILE = "original.mp4"
 AUDIO_FILE = "audio.wav"
 PROXY_FILE = "proxy.mp4"

@@ -42,12 +42,17 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def live(storage, db_override, session_factory):
+def object_storage():
+    return InMemoryObjectStorage()
+
+
+@pytest.fixture
+def live(storage, object_storage, db_override, session_factory):
     """Client wired to the real dispatcher; yields (client, dispatcher, published events)."""
     events = []
-    dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
+    dispatcher = InProcessDispatcher(storage, object_storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
-    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
+    app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
@@ -177,7 +182,7 @@ def test_complete_with_missing_chunks_is_conflict(live):
     assert "2 chunk(s) missing, starting at index 1" in response.json()["detail"]
 
 
-def test_chunked_upload_is_assembled_and_ingested(live, storage, make_sample):
+def test_chunked_upload_is_assembled_and_ingested(live, storage, object_storage, make_sample):
     """FR02 acceptance: a chunked upload is assembled and ingested asynchronously, end to end."""
     client, dispatcher, events = live
     project_id = new_project(client)
@@ -192,7 +197,7 @@ def test_chunked_upload_is_assembled_and_ingested(live, storage, make_sample):
     assert accepted.json()["status"] == "queued"
     assert body["job"]["status"] == "completed"
     assert body["metadata"]["source"] == "Lecture 1.mp4"
-    assert storage.path(project_id, "source", f"{upload_id}.mp4").read_bytes() == data
+    assert object_storage.objects[(project_id, f"source/{upload_id}.mp4")] == data
     assert not (storage.project_dir(project_id) / "uploads" / upload_id).exists()
     assert len(events) == 1
 

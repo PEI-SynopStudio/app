@@ -61,9 +61,10 @@ def client(storage, dispatcher, db_override):
 def live(storage, db_override, session_factory):
     """Client wired to the in-process stand-in; yields (client, dispatcher, published events)."""
     events = []
-    dispatcher = InProcessDispatcher(storage, session_factory, publish_event=events.append)
+    object_storage = InMemoryObjectStorage()
+    dispatcher = InProcessDispatcher(storage, object_storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
-    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
+    app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)

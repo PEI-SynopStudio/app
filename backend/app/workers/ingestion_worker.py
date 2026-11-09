@@ -23,6 +23,7 @@ from app.core.config import (
 )
 from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorage, get_object_storage
 from app.services.workflow.ingestion_pipeline import run_ingestion
 from app.services.workflow.rabbitmq import declare_event_queue, declare_job_queue
 
@@ -34,9 +35,10 @@ logger = logging.getLogger(__name__)
 class IngestionWorker:
     """Never touches PostgreSQL: everything the backend needs travels in the events."""
 
-    def __init__(self, url: str, storage: LocalStorage) -> None:
+    def __init__(self, url: str, storage: LocalStorage, object_storage: ObjectStorage) -> None:
         self._url = url
         self._storage = storage
+        self._object_storage = object_storage
 
     async def run(self) -> None:
         connection = await aio_pika.connect_robust(self._url)
@@ -77,7 +79,7 @@ class IngestionWorker:
         # No automatic retries: a worker that dies leaves the job processing until the sweep marks it as timeout.
         await message.ack()
         try:
-            await asyncio.to_thread(run_ingestion, self._storage, request, self._emit)
+            await asyncio.to_thread(run_ingestion, self._storage, self._object_storage, request, self._emit)
         except Exception:
             # The pipeline has already reported the failure; the worker stays up for the next job.
             logger.exception(LOG_WORKER_JOB_CRASHED, request.job_id)
@@ -113,7 +115,7 @@ class IngestionWorker:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-    asyncio.run(IngestionWorker(get_settings().rabbitmq_url, get_storage()).run())
+    asyncio.run(IngestionWorker(get_settings().rabbitmq_url, get_storage(), get_object_storage()).run())
 
 
 if __name__ == "__main__":

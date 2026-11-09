@@ -8,6 +8,7 @@ from app.schemas.job import IngestionParams, JobRequestMessage
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import download_youtube_video, inspect_media
 from app.services.workflow.ingestion_pipeline import run_ingestion
+from in_memory_object_storage import InMemoryObjectStorage
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -42,7 +43,7 @@ def test_pipeline_ingests_youtube_time_range(tmp_path):
         parameters=IngestionParams(source_url=SAMPLE_URL, time_start="00:01:07", time_end="00:01:27"),
     )
 
-    final = run_ingestion(storage, request, lambda event: None)
+    final = run_ingestion(storage, InMemoryObjectStorage(), request, lambda event: None)
 
     assert final.status == JobStatusEnum.COMPLETED, final.error_message
     assert final.output["source"] == SAMPLE_URL

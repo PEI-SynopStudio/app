@@ -15,6 +15,7 @@ from app.core.config import (
     ERROR_FILE_NOT_FOUND,
     ERROR_INTERNAL,
     ERROR_INVALID_STAGED_FILE,
+    ERROR_STORAGE_UNAVAILABLE,
     JSON_DUMP_MODE,
     KEYFRAMES_FILE,
     LOG_INGESTION_FAILED,
@@ -34,6 +35,7 @@ from app.core.config import (
 from app.core.exceptions import MediaProcessingError, MediaRejectedError
 from app.schemas.job import JobRequestMessage, JobUpdateEventSchema
 from app.services.storage.local import LocalStorage
+from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.ingestion import (
     MediaInfo,
     PacketScan,
@@ -61,12 +63,15 @@ EventEmitter = Callable[[JobUpdateEventSchema], None]
 
 # Run FR02 steps 2–6 in order and report each step as an event; any failure ends in a failed event.
 # Source: MS2 FR02 – Steps 2 to 6; architecture §4 step 2.
-def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: EventEmitter) -> JobUpdateEventSchema:
+def run_ingestion(
+    storage: LocalStorage, object_storage: ObjectStorage, request: JobRequestMessage, emit: EventEmitter
+) -> JobUpdateEventSchema:
     """Blocking: call it from a worker, never from an endpoint. Returns the final event.
 
     Business-rule rejections and processing errors end in a failed event, which is returned.
     Unexpected errors emit a failed event as well, then are re-raised so the worker logs them.
     The project and its licence (FR01) are checked before the job exists: workers have no database access.
+    The working files are removed before the final event, so nothing of the job stays outside the encrypted storage.
     """
     project_id = str(request.project_id)
 
@@ -81,6 +86,7 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         return _throttled(lambda percent: publish(status=JobStatusEnum.PROCESSING, step=step, step_progress=percent))
 
     def fail(code: JobErrorCodeEnum, message: str) -> JobUpdateEventSchema:
+        storage.delete_working_files(project_id)
         return publish(status=JobStatusEnum.FAILED, step_progress=PROGRESS_MIN, error_code=code, error_message=message)
 
     try:
@@ -107,19 +113,24 @@ def run_ingestion(storage: LocalStorage, request: JobRequestMessage, emit: Event
         proxy_path = generate_proxy_video(source_path, storage.path(project_id, PROXY_DIR, PROXY_FILE), report)
         generate_keyframe_index(proxy_path, storage.path(project_id, ANALYSIS_DIR, KEYFRAMES_FILE))
 
-        advance(JobStepProcessingEnum.PERSISTING_RESULTS)
+        report = advance(JobStepProcessingEnum.PERSISTING_RESULTS)
         output = _build_output(storage, request, media, scan.is_vfr, source_path, cut_start)
+        _store_results(storage, object_storage, project_id, output, report)
     except (MediaRejectedError, MediaProcessingError) as exc:
         return fail(exc.code, str(exc))
     except (ValueError, FileNotFoundError) as exc:
         return fail(JobErrorCodeEnum.INVALID_SOURCE, str(exc))
     except RuntimeError as exc:
         return fail(JobErrorCodeEnum.CORRUPTED_MEDIA, str(exc))
+    except ObjectStorageError:
+        logger.exception(LOG_INGESTION_FAILED, project_id)
+        return fail(JobErrorCodeEnum.INTERNAL_ERROR, ERROR_STORAGE_UNAVAILABLE)
     except Exception:
         logger.exception(LOG_INGESTION_FAILED, project_id)
         fail(JobErrorCodeEnum.INTERNAL_ERROR, ERROR_INTERNAL)
         raise
 
+    storage.delete_working_files(project_id)
     return publish(status=JobStatusEnum.COMPLETED, step_progress=PROGRESS_MAX, output=output.model_dump(mode=JSON_DUMP_MODE))
 
 
@@ -193,6 +204,25 @@ def _fetch_source(
     if not source_path.is_file():
         raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=request.staged_file))
     return source_path
+
+
+# Send the source and everything derived from it to object storage.
+# Source: MS2 FR02 – Step 6; architecture §2 (workers read and write object storage directly).
+def _store_results(
+    storage: LocalStorage,
+    object_storage: ObjectStorage,
+    project_id: str,
+    output: IngestionOutput,
+    report: ProgressCallback,
+) -> None:
+    """Objects left by a job that fails halfway cause no lasting harm.
+
+    The next ingestion replaces them, and deleting the project removes everything under its prefix.
+    """
+    keys = (output.source_key, output.audio_key, output.proxy_key, output.waveform_key, output.keyframes_key)
+    for sent, key in enumerate(keys, start=1):
+        object_storage.put_file(project_id, key, storage.path(project_id, key))
+        report(PROGRESS_MAX * sent / len(keys))
 
 
 def _build_output(

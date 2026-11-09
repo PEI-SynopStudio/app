@@ -2,14 +2,14 @@ import shutil
 import uuid
 from pathlib import Path
 
-from app.core.config import ERROR_INVALID_PROJECT_ID, PROJECTS_DIR, UPLOADS_DIR, get_settings
+from app.core.config import ERROR_INVALID_PROJECT_ID, PROJECTS_DIR, UPLOADS_DIR, WORKING_DIRS, get_settings
 
 
 class LocalStorage:
-    """Per-project file storage on the local media volume.
+    """Per-project working area on the local media volume: files being processed and chunks being uploaded.
 
-    Layout: <root>/projects/<project_id>/{source,audio,proxy,analysis,uploads}/. Kept small so it can be
-    swapped for an S3-compatible backend (SeaweedFS) later.
+    Layout: <root>/projects/<project_id>/{source,audio,proxy,analysis,uploads}/. PyAV and yt-dlp need local
+    files; what must last is kept in object storage (ObjectStorage).
     """
 
     def __init__(self, root: Path):
@@ -32,6 +32,11 @@ class LocalStorage:
     def delete(self, project_id: str, key: str) -> None:
         """Remove a file of the project if it exists; `key` is relative to the project directory."""
         (self.project_dir(project_id) / key).unlink(missing_ok=True)
+
+    def delete_working_files(self, project_id: str) -> None:
+        """Remove what a job left behind; the chunks of uploads still in progress stay."""
+        for directory in WORKING_DIRS:
+            shutil.rmtree(self.project_dir(project_id) / directory, ignore_errors=True)
 
     def delete_upload(self, project_id: str, upload_id: str) -> None:
         """Remove the chunks of an upload that was never completed."""

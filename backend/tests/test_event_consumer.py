@@ -20,6 +20,7 @@ from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
 from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.jobs import create_ingestion_job, queue_job
 from app.services.workflow.progress_hub import JobProgressHub
+from in_memory_object_storage import InMemoryObjectStorage
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
 from app.workers.ingestion_worker import IngestionWorker
 from test_rabbitmq import TEST_RABBITMQ_URL, UNREACHABLE_URL, broker_is_running
@@ -146,7 +147,7 @@ def test_worker_events_reach_the_database_and_announce_the_ingestion(queues, ses
     async def run_worker():
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
-            worker = IngestionWorker(TEST_RABBITMQ_URL, storage)
+            worker = IngestionWorker(TEST_RABBITMQ_URL, storage, InMemoryObjectStorage())
             await worker.open(await connection.channel())
             await worker.process_next()
 

@@ -13,6 +13,7 @@ from app.services.workflow import rabbitmq as rabbitmq_module
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
 from app.workers import ingestion_worker
 from app.workers.ingestion_worker import IngestionWorker
+from in_memory_object_storage import InMemoryObjectStorage
 from test_rabbitmq import TEST_RABBITMQ_URL, broker_is_running
 
 
@@ -50,13 +51,13 @@ def queues(monkeypatch):
     asyncio.run(remove())
 
 
-def process_next(storage):
+def process_next(storage, object_storage=None):
     """Run the worker for one job, on a connection of its own."""
 
     async def run():
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
-            worker = IngestionWorker(TEST_RABBITMQ_URL, storage)
+            worker = IngestionWorker(TEST_RABBITMQ_URL, storage, object_storage or InMemoryObjectStorage())
             await worker.open(await connection.channel())
             return await worker.process_next()
 
@@ -109,15 +110,16 @@ def events_in(queue_name):
 def test_worker_runs_the_job_and_publishes_its_events(queues, storage, make_sample):
     jobs_queue, events_queue = queues
     request = stage_job(storage, make_sample(tone=True))
+    object_storage = InMemoryObjectStorage()
 
-    assert process_next(storage) is True
+    assert process_next(storage, object_storage) is True
 
     events = events_in(events_queue)
     assert {event.job_id for event in events} == {request.job_id}
     assert events[0].status == JobStatusEnum.PROCESSING
     assert events[-1].status == JobStatusEnum.COMPLETED
     assert events[-1].output["proxy_key"] == "proxy/proxy.mp4"
-    assert storage.path(str(request.project_id), "proxy", "proxy.mp4").is_file()
+    assert (str(request.project_id), "proxy/proxy.mp4") in object_storage.objects
     assert read_all(jobs_queue) == []
 
 
@@ -169,7 +171,7 @@ def emit_with_failures(monkeypatch, failures):
             raise AMQPError("broker restarting")
 
     async def run():
-        worker = IngestionWorker(TEST_RABBITMQ_URL, None)
+        worker = IngestionWorker(TEST_RABBITMQ_URL, None, None)
         worker._loop = asyncio.get_running_loop()
         worker._publish_event = flaky_publish
         event = JobUpdateEventSchema(job_id=uuid.uuid4(), status=JobStatusEnum.PROCESSING, step_progress=10)
@@ -191,7 +193,7 @@ def test_event_gives_up_when_the_broker_stays_down(monkeypatch):
 
 
 def test_crashed_job_is_not_delivered_again(queues, storage, make_sample, monkeypatch, caplog):
-    def crash(storage, request, emit):
+    def crash(storage, object_storage, request, emit):
         raise KeyError("bug")
 
     monkeypatch.setattr(ingestion_worker, "run_ingestion", crash)
