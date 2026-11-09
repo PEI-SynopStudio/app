@@ -13,13 +13,10 @@ from app.core.config import (
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
-    ERROR_JOB_INTERRUPTED,
     ERROR_JOB_STALLED,
     JOB_ACTIVE_INGESTION_INDEX,
-    JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
-    LOG_JOBS_INTERRUPTED,
     ApplyOutcome,
     AuditAction,
     JobErrorCodeEnum,
@@ -125,18 +122,6 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
         logger.warning(LOG_JOB_EVENT_REJECTED, event.job_id, result.reason)
     db.commit()
     return result
-
-
-# Fail the jobs a previous server left active, so they do not block their projects forever.
-# Source: temporary until the RabbitMQ worker, because the in-process dispatcher loses running jobs on restart.
-def fail_interrupted_jobs(db: Session) -> int:
-    """Run once when the server starts, before it accepts requests; returns how many jobs were failed."""
-    jobs = db.scalars(select(Job).where(Job.status.in_(JOB_ACTIVE_STATUSES))).all()
-    for job in jobs:
-        fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_INTERRUPTED)
-    if jobs:
-        logger.warning(LOG_JOBS_INTERRUPTED, len(jobs))
-    return len(jobs)
 
 
 # Fail the running jobs whose worker went silent, so they do not block their projects forever.

@@ -137,8 +137,7 @@ def save_chunk(storage: LocalStorage, session: UploadSession, index: int, data: 
 
 
 def close_upload(db: Session, session: UploadSession) -> None:
-    """Called once the job is queued: the chunks now belong to the job and the asset is being processed."""
-    db.get(MediaAsset, session.media_asset_id).status = MediaAssetStatus.PROCESSING
+    """Called once the job is on the broker: the chunks now belong to the job."""
     db.delete(session)
     db.commit()
 

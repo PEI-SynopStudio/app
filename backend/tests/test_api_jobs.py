@@ -5,8 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
-from app.core.config import JobStatusEnum, LicenseType, ProjectStatus
-from app.database.models import Job, Project
+from app.core.config import JobStatusEnum, LicenseType
+from app.database.models import Job
 from app.main import app
 from app.schemas.job import IngestionParams
 from app.schemas.project import ProjectCreate
@@ -58,7 +58,8 @@ def test_invalid_job_id_is_rejected(client, db):
     assert client.get(f"/projects/{queued_job(db).project_id}/jobs/not-a-uuid").status_code == 422
 
 
-def test_starting_the_server_fails_jobs_left_running(session_factory, db, monkeypatch):
+def test_restarting_the_api_leaves_the_jobs_alone(session_factory, db, monkeypatch):
+    """The jobs run in the workers, which do not restart with the API."""
     job = queued_job(db)
     monkeypatch.setattr(main_module, "get_session_factory", lambda: session_factory)
 
@@ -66,5 +67,4 @@ def test_starting_the_server_fails_jobs_left_running(session_factory, db, monkey
         pass
 
     db.expire_all()
-    assert db.get(Job, job.id).status == JobStatusEnum.FAILED
-    assert db.get(Project, job.project_id).status == ProjectStatus.INGESTION_FAILED
+    assert db.get(Job, job.id).status == JobStatusEnum.QUEUED

@@ -9,8 +9,9 @@ from app.database.base import utc_now
 from app.database.models import AuditLog, Job, MediaAsset, UploadSession
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
-from app.services.workflow.dispatcher import InProcessDispatcher, get_dispatcher
 from app.services.workflow.jobs import fail_job
+from app.services.workflow.rabbitmq import get_dispatcher
+from in_process_dispatcher import InProcessDispatcher
 
 CHUNK_SIZE = 4096
 JOIN_TIMEOUT_SECONDS = 60

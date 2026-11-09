@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage
 from aio_pika.exceptions import CONNECTION_EXCEPTIONS
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,11 +27,21 @@ from app.core.exceptions import JobNotFoundError
 from app.database.models import Job
 from app.schemas.job import JobUpdateEventSchema
 from app.services.video.metadata import IngestionOutput
-from app.services.workflow.dispatcher import MediaIngestedEvent
 from app.services.workflow.jobs import apply_job_event
 from app.services.workflow.rabbitmq import declare_event_queue, declare_media_events_exchange
 
 logger = logging.getLogger(__name__)
+
+
+class MediaIngestedEvent(BaseModel):
+    """Published when ingestion completes; triggers transcription and diarization (FR04, FR05)."""
+    event: str = MEDIA_INGESTED_EVENT
+    job_id: uuid.UUID
+    project_id: uuid.UUID
+    # Paths relative to the project directory, so consumers do not depend on the storage backend.
+    audio_path: str
+    proxy_path: str
+    occurred_at: datetime
 
 
 # Apply the events of the workers to the database and announce the finished ingestions.

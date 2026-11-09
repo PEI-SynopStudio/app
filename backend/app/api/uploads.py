@@ -30,7 +30,8 @@ from app.services.video.uploads import (
     save_chunk,
     start_upload,
 )
-from app.services.workflow.dispatcher import JobDispatcher, get_dispatcher
+from app.services.workflow.dispatcher import JobDispatcher
+from app.services.workflow.rabbitmq import get_dispatcher
 from app.services.workflow.submission import submit_upload_ingestion
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[INGESTION_ROUTE_TAG])

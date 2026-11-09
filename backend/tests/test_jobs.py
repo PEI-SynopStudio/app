@@ -22,7 +22,6 @@ from app.services.workflow.jobs import (
     IngestionAlreadyRunningError,
     apply_job_event,
     create_ingestion_job,
-    fail_interrupted_jobs,
     fail_job,
     queue_job,
 )
@@ -173,24 +172,3 @@ def test_events_of_the_same_job_wait_for_each_other(db, session_factory):
     assert not thread.is_alive()
     db.expire_all()
     assert db.get(Job, job.id).status == JobStatusEnum.PROCESSING
-
-
-def test_interrupted_jobs_are_failed_and_finished_jobs_are_kept(db):
-    interrupted = queued_job(db)
-    finished = fail_job(db, new_job(db, make_project(db)), JobErrorCodeEnum.TIMEOUT, "Too slow")
-
-    assert fail_interrupted_jobs(db) == 1
-
-    db.expire_all()
-    stored = db.get(Job, interrupted.id)
-    assert (stored.status, stored.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.INTERNAL_ERROR)
-    assert "restarted" in stored.error_message
-    assert db.get(Job, finished.id).error_code == JobErrorCodeEnum.TIMEOUT
-
-
-def test_an_interrupted_job_no_longer_blocks_its_project(db):
-    job = queued_job(db)
-
-    fail_interrupted_jobs(db)
-
-    assert new_job(db, str(job.project_id)).status == JobStatusEnum.PENDING

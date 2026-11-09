@@ -127,6 +127,21 @@ def test_upload_submission_records_the_requested_range(db, storage, dispatcher):
     assert (dispatcher.requests[0].parameters.time_start, dispatcher.requests[0].parameters.time_end) == ("00:01:00", "00:02:00")
 
 
+def test_upload_survives_a_broker_failure_and_can_be_completed_again(db, storage, dispatcher):
+    session = start_upload(db, make_project(db), "Debate.mp4", 10, "video/mp4")
+    session_id = session.id
+
+    with pytest.raises(ConnectionError):
+        submit_upload_ingestion(db, storage, BrokenDispatcher(), session)
+
+    retried = db.get(UploadSession, session_id)
+    assert retried is not None
+    job = submit_upload_ingestion(db, storage, dispatcher, retried)
+    assert job.status == JobStatusEnum.QUEUED
+    assert count(db, UploadSession) == 0
+    assert db.get(MediaAsset, job.media_asset_id).status == MediaAssetStatus.PROCESSING
+
+
 def test_refused_upload_keeps_the_session(db, storage, dispatcher):
     project_id = make_project(db)
     submit_url(db, dispatcher, project_id)

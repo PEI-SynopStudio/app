@@ -1,5 +1,5 @@
 import asyncio
-
+from functools import lru_cache
 from typing import Tuple
 
 import aio_pika
@@ -18,6 +18,7 @@ from app.core.config import (
     MEDIA_EVENTS_EXCHANGE,
     MEDIA_INGESTED_EVENT,
     MEDIA_INGESTED_QUEUE,
+    get_settings,
 )
 from app.core.exceptions import JobDispatchError
 from app.schemas.job import JobRequestMessage
@@ -75,3 +76,9 @@ class RabbitMQDispatcher(JobDispatcher):
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             )
             await exchange.publish(message, job_type)
+
+
+@lru_cache
+def get_dispatcher() -> JobDispatcher:
+    """One dispatcher per process (FastAPI dependency)."""
+    return RabbitMQDispatcher(get_settings().rabbitmq_url)

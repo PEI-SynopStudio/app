@@ -9,7 +9,7 @@ from aio_pika.exceptions import AMQPError
 from app.core.exceptions import JobDispatchError
 from app.schemas.job import IngestionParams, JobRequestMessage
 from app.services.workflow import rabbitmq as rabbitmq_module
-from app.services.workflow.rabbitmq import RabbitMQDispatcher
+from app.services.workflow.rabbitmq import RabbitMQDispatcher, get_dispatcher
 
 TEST_RABBITMQ_URL = os.environ.get("TEST_RABBITMQ_URL", "amqp://pei:pei@localhost:5672/")
 UNREACHABLE_URL = "amqp://pei:pei@127.0.0.1:1/"
@@ -94,6 +94,14 @@ def test_wrong_credentials_are_a_dispatch_error(queue_name):
 
     with pytest.raises(JobDispatchError, match="could not be queued"):
         RabbitMQDispatcher(url).dispatch(job_request())
+
+
+def test_the_api_publishes_jobs_to_the_broker():
+    get_dispatcher.cache_clear()
+    try:
+        assert isinstance(get_dispatcher(), RabbitMQDispatcher)
+    finally:
+        get_dispatcher.cache_clear()
 
 
 def test_unreachable_broker_is_a_dispatch_error():

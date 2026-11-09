@@ -9,7 +9,6 @@ from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE,
 from app.database.session import get_session_factory
 from app.services.storage.local import get_storage
 from app.services.workflow.event_consumer import JobEventConsumer
-from app.services.workflow.jobs import fail_interrupted_jobs
 from app.services.workflow.sweeper import run_periodic_sweep
 
 
@@ -25,8 +24,6 @@ def _configure_logging() -> None:
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    with get_session_factory()() as db:
-        fail_interrupted_jobs(db)
     tasks = [
         asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory()).run()),
         asyncio.create_task(run_periodic_sweep(get_session_factory(), get_storage())),

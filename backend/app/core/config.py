@@ -93,12 +93,9 @@ ERROR_CUT_FAILED = "Failed to cut the requested time range: {details}"
 ERROR_INTERNAL = "Unexpected error during ingestion; see the worker logs."
 LOG_INGESTION_FAILED = "Ingestion failed for project %s"
 
-# --- Job dispatch and events (in-process until the RabbitMQ worker exists) ---
+# --- Job dispatch and events ---
 MEDIA_INGESTED_EVENT = "media.ingested"
-INGESTION_THREAD_NAME = "ingestion-{project_id}"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
-LOG_EVENT_PUBLISHED = "Event %s published: %s"
-LOG_JOB_CRASHED = "Ingestion job crashed for project %s"
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
@@ -333,8 +330,6 @@ ERROR_CODE_STALE_ATTEMPT = "stale_job_attempt"
 ERROR_CODE_INVALID_STEP = "invalid_step"
 ERROR_JOB_NOT_FOUND = "Job not found"
 ERROR_INVALID_JOB_ID = "Invalid job ID: {job_id!r}"
-ERROR_JOB_INTERRUPTED = "The server restarted while this job was running; please submit it again."
-LOG_JOBS_INTERRUPTED = "%d job(s) left running by a previous server were marked as failed"
 ERROR_INVALID_TRANSITION = "Invalid transition: {current} -> {target}"
 ERROR_JOB_ALREADY_TERMINAL = "Job is already in a final status ({status})."
 ERROR_STALE_JOB_ATTEMPT = "Event from a past attempt ignored ({event_attempt} < {current_attempt})."

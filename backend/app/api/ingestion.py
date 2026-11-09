@@ -22,7 +22,8 @@ from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.video.metadata import TechnicalMetadata
 from app.services.video.sources import validate_source_url, validate_time_range
-from app.services.workflow.dispatcher import JobDispatcher, get_dispatcher
+from app.services.workflow.dispatcher import JobDispatcher
+from app.services.workflow.rabbitmq import get_dispatcher
 from app.services.workflow.jobs import latest_ingestion_job
 from app.services.workflow.submission import submit_url_ingestion
 

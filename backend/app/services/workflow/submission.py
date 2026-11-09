@@ -68,7 +68,7 @@ def submit_upload_ingestion(
     time_start: Optional[str] = None,
     time_end: Optional[str] = None,
 ) -> Job:
-    """If the job is refused (e.g. 409), nothing changes, so the upload can be completed again later."""
+    """If the job is refused (e.g. 409) or the broker fails, the session stays, so the upload can be completed again."""
     params = IngestionParams(media_id=session.media_asset_id, time_start=time_start, time_end=time_end)
     job = create_ingestion_job(
         db, str(session.project_id), params, session.file_name, media_asset_id=session.media_asset_id
@@ -76,6 +76,7 @@ def submit_upload_ingestion(
     asset = db.get(MediaAsset, session.media_asset_id)
     asset.source_key = _source_key(session.staged_file)
     asset.time_start_seconds, asset.time_end_seconds = _seconds(time_start), _seconds(time_end)
+    asset.status = MediaAssetStatus.PROCESSING
     _replace_previous_assets(db, storage, job)
     request = JobRequestMessage(
         job_id=job.id,
@@ -85,8 +86,9 @@ def submit_upload_ingestion(
         staged_file=session.staged_file,
         file_name=session.file_name,
     )
+    _queue_and_dispatch(db, dispatcher, job, request)
     close_upload(db, session)
-    return _queue_and_dispatch(db, dispatcher, job, request)
+    return job
 
 
 def _replace_previous_assets(db: Session, storage: LocalStorage, job: Job) -> None:
