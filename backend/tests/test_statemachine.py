@@ -243,6 +243,22 @@ def test_cancelled_event_from_queued_job():
     assert result.outcome == state_machine.ApplyOutcome.APPLIED
     assert result.job.status == JobStatusEnum.CANCELLED
     assert result.job.finished_at == at(1)
+
+
+def test_change_status_stores_error_message():
+    job = make_job(status=JobStatusEnum.PROCESSING, started_at=at(10))
+    new_job = state_machine.change_status(
+        job, JobStatusEnum.FAILED, at(15), error_code=JobErrorCodeEnum.TIMEOUT, error_message="No events received"
+    )
+
+    assert new_job.error_message == "No events received"
+
+
+def test_step_of_another_pipeline_is_rejected_with_a_clear_reason():
+    result = state_machine.apply_event(make_job(), make_event(step=JobStepProcessingEnum.TRANSCRIBING))
+
+    assert result.outcome == state_machine.ApplyOutcome.REJECTED
+    assert "does not belong to pipeline" in result.reason
     
 
     

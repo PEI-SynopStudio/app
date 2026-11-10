@@ -1,17 +1,17 @@
 import math
 import os
-import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, List, Optional
 
-from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import (
     ALLOWED_UPLOAD_MIME_TYPES,
-    CHUNK_FILE_FORMAT,
-    COPY_BUFFER_BYTES,
+    AUDIT_DETAIL_FILE_NAME,
+    AUDIT_DETAIL_SIZE_BYTES,
     ERROR_CHUNK_INDEX_OUT_OF_RANGE,
     ERROR_CHUNK_SIZE_MISMATCH,
     ERROR_INVALID_UPLOAD_ID,
@@ -22,34 +22,18 @@ from app.core.config import (
     ERROR_UPLOAD_NOT_FOUND,
     ERROR_UPLOAD_TOO_LARGE,
     EXTENSION_SEPARATOR,
-    FILE_READ_MODE,
-    FILE_WRITE_MODE,
-    JSON_DUMP_MODE,
     LIST_SEPARATOR,
     SOURCE_DIR,
-    TMP_SUFFIX,
-    UPLOAD_CHUNKS_DIR,
-    UPLOAD_SESSION_FILE,
-    UPLOADS_DIR,
+    AuditAction,
+    MediaAssetStatus,
+    SourceType,
     get_settings,
 )
+from app.database.base import utc_now
+from app.database.models import MediaAsset, UploadSession
+from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
-from app.services.storage.local import LocalStorage
-
-
-class UploadSession(BaseModel):
-    upload_id: str
-    project_id: str
-    # Original name from the client: kept for the metadata, never used as a path.
-    file_name: str
-    content_type: Optional[str] = None
-    size_bytes: int
-    chunk_size: int
-    total_chunks: int
-    # Server-chosen name of the assembled file in the project's source directory.
-    staged_file: str
-    assembled: bool = False
-    created_at: datetime
+from app.services.storage.object_storage import ObjectStorage
 
 
 class UploadNotFoundError(LookupError):
@@ -60,97 +44,116 @@ class UploadIncompleteError(Exception):
     pass
 
 
+def source_key(file_name: str) -> str:
+    """Storage key of a project's source video."""
+    return PurePosixPath(SOURCE_DIR, file_name).as_posix()
+
+
 # Validate the declared file (extension, MIME type, size) and open an upload session with a fixed chunk size.
 # Source: MS2 FR02 – Step 1 (direct upload, extension and MIME check, chunked multipart upload for multi-GB files).
 def start_upload(
-    storage: LocalStorage, project_id: str, file_name: str, size_bytes: int, content_type: Optional[str]
+    db: Session,
+    object_storage: ObjectStorage,
+    project_id: str,
+    file_name: str,
+    size_bytes: int,
+    content_type: Optional[str],
 ) -> UploadSession:
     """Refuse at once when the licence is not confirmed (FR01) or the file is not acceptable."""
-    require_ingestion_allowed(storage, project_id)
+    project = require_ingestion_allowed(db, project_id)
     extension = _check_declared_file(file_name, size_bytes, content_type)
 
-    upload_id = str(uuid.uuid4())
-    chunk_size = get_settings().upload_chunk_size_bytes
+    settings = get_settings()
+    upload_id = uuid.uuid4()
+    staged_file = str(upload_id) + EXTENSION_SEPARATOR + extension
+    asset = MediaAsset(
+        project_id=project.id,
+        source_type=SourceType.UPLOAD,
+        file_name=file_name,
+        status=MediaAssetStatus.UPLOADING,
+    )
+    db.add(asset)
+    db.flush()  # assigns the ID the session refers to
     session = UploadSession(
-        upload_id=upload_id,
-        project_id=project_id,
+        id=upload_id,
+        project_id=project.id,
+        media_asset_id=asset.id,
         file_name=file_name,
         content_type=content_type or None,
         size_bytes=size_bytes,
-        chunk_size=chunk_size,
-        total_chunks=math.ceil(size_bytes / chunk_size),
-        staged_file=upload_id + EXTENSION_SEPARATOR + extension,
-        created_at=datetime.now(timezone.utc),
+        chunk_size=settings.upload_chunk_size_bytes,
+        total_chunks=math.ceil(size_bytes / settings.upload_chunk_size_bytes),
+        staged_file=staged_file,
+        storage_upload_id=object_storage.start_chunked_upload(str(project.id), source_key(staged_file)),
+        expires_at=utc_now() + timedelta(seconds=settings.upload_session_ttl_seconds),
     )
-    _save(storage, session)
+    db.add(session)
+    record_audit(
+        db,
+        project.id,
+        AuditAction.UPLOAD_STARTED,
+        {AUDIT_DETAIL_FILE_NAME: file_name, AUDIT_DETAIL_SIZE_BYTES: size_bytes},
+    )
+    db.commit()
     return session
 
 
-def get_upload(storage: LocalStorage, project_id: str, upload_id: str) -> UploadSession:
-    data = storage.read_json(project_id, _session_name(_normalize_upload_id(upload_id)))
-    if data is None:
+def get_upload(db: Session, project_id: str, upload_id: str) -> UploadSession:
+    session = db.get(UploadSession, _parse_upload_id(upload_id))
+    if session is None or str(session.project_id) != project_id:
         raise UploadNotFoundError(ERROR_UPLOAD_NOT_FOUND.format(upload_id=upload_id))
-    return UploadSession.model_validate(data)
+    return session
 
 
-def missing_chunks(storage: LocalStorage, session: UploadSession) -> List[int]:
-    return [index for index in range(session.total_chunks) if not _chunk_path(storage, session, index).is_file()]
+def missing_chunks(object_storage: ObjectStorage, session: UploadSession) -> List[int]:
+    received = object_storage.received_chunks(
+        str(session.project_id), source_key(session.staged_file), session.storage_upload_id
+    )
+    return [index for index in range(session.total_chunks) if index not in received]
+
+
+def require_all_chunks(object_storage: ObjectStorage, session: UploadSession) -> None:
+    missing = missing_chunks(object_storage, session)
+    if missing:
+        raise UploadIncompleteError(ERROR_UPLOAD_INCOMPLETE.format(count=len(missing), first=missing[0]))
 
 
 # Store one chunk; every chunk has the session's chunk size except the last, which holds the remainder.
 # Source: MS2 FR02 – Step 1 (chunked multipart upload).
-def save_chunk(storage: LocalStorage, session: UploadSession, index: int, data: BinaryIO) -> None:
-    """Write through a temp file and rename, so a retried or interrupted chunk never leaves a partial file."""
+def save_chunk(object_storage: ObjectStorage, session: UploadSession, index: int, data: BinaryIO) -> None:
+    """Measured before it is sent, so a chunk of the wrong size never reaches the storage."""
     last = session.total_chunks - 1
     if not 0 <= index <= last:
         raise ValueError(ERROR_CHUNK_INDEX_OUT_OF_RANGE.format(index=index, last=last))
     expected = session.chunk_size if index < last else session.size_bytes - session.chunk_size * last
 
-    target = _chunk_path(storage, session, index)
-    tmp = target.with_name(target.name + TMP_SUFFIX)
-    written = 0
-    try:
-        with open(tmp, FILE_WRITE_MODE) as out:
-            # Stop reading once the chunk is too big instead of storing an oversized body.
-            while written <= expected and (block := data.read(COPY_BUFFER_BYTES)):
-                out.write(block)
-                written += len(block)
-        if written != expected:
-            raise ValueError(ERROR_CHUNK_SIZE_MISMATCH.format(index=index, expected=expected, actual=written))
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
+    received = data.seek(0, os.SEEK_END)
+    data.seek(0)
+    if received != expected:
+        raise ValueError(ERROR_CHUNK_SIZE_MISMATCH.format(index=index, expected=expected, actual=received))
+    object_storage.put_chunk(
+        str(session.project_id), source_key(session.staged_file), session.storage_upload_id, index, data
+    )
 
 
-# Concatenate all chunks, in order, into the project's source directory.
-# Source: MS2 FR02 – Step 2 (upload assembled in staging storage).
-def assemble_upload(storage: LocalStorage, session: UploadSession) -> UploadSession:
-    """Idempotent: an already assembled session is returned unchanged, so 'complete' can be retried.
-
-    Each chunk is deleted once copied, so the disk holds about one copy of the file, not two.
-    """
-    if session.assembled:
-        return session
-    missing = missing_chunks(storage, session)
-    if missing:
-        raise UploadIncompleteError(ERROR_UPLOAD_INCOMPLETE.format(count=len(missing), first=missing[0]))
-
-    target = storage.path(session.project_id, SOURCE_DIR, session.staged_file)
-    with open(target, FILE_WRITE_MODE) as out:
-        for index in range(session.total_chunks):
-            chunk = _chunk_path(storage, session, index)
-            with open(chunk, FILE_READ_MODE) as src:
-                shutil.copyfileobj(src, out, COPY_BUFFER_BYTES)
-            chunk.unlink()
-
-    assembled = session.model_copy(update={"assembled": True})
-    _save(storage, assembled)
-    return assembled
+def close_upload(db: Session, session: UploadSession) -> None:
+    """Called once the job is on the broker: the chunks now belong to the job."""
+    db.delete(session)
+    db.commit()
 
 
-def discard_upload(storage: LocalStorage, session: UploadSession) -> None:
-    """Remove the session and any remaining chunks (the assembled source file is kept)."""
-    shutil.rmtree(storage.project_dir(session.project_id) / UPLOADS_DIR / session.upload_id, ignore_errors=True)
+# Remove the chunks and the records of the uploads that were started but never completed.
+# Source: MS2 FR02 – Step 1 (chunked upload); the session expiry set when the upload starts.
+def purge_expired_uploads(db: Session, object_storage: ObjectStorage) -> int:
+    """Returns how many uploads were removed; deleting the media asset also removes its session (database cascade)."""
+    sessions = db.scalars(select(UploadSession).where(UploadSession.expires_at < utc_now())).all()
+    for session in sessions:
+        object_storage.abort_chunked_upload(
+            str(session.project_id), source_key(session.staged_file), session.storage_upload_id
+        )
+        db.delete(db.get(MediaAsset, session.media_asset_id))
+        db.commit()
+    return len(sessions)
 
 
 def _check_declared_file(file_name: str, size_bytes: int, content_type: Optional[str]) -> str:
@@ -170,23 +173,8 @@ def _check_declared_file(file_name: str, size_bytes: int, content_type: Optional
     return extension
 
 
-def _normalize_upload_id(upload_id: str) -> str:
-    # Upload IDs are UUIDs, which also keeps them from being used for path traversal.
+def _parse_upload_id(upload_id: str) -> uuid.UUID:
     try:
-        return str(uuid.UUID(upload_id))
+        return uuid.UUID(upload_id)
     except (ValueError, AttributeError, TypeError):
         raise ValueError(ERROR_INVALID_UPLOAD_ID.format(upload_id=upload_id))
-
-
-def _session_name(upload_id: str) -> str:
-    return PurePosixPath(UPLOADS_DIR, upload_id, UPLOAD_SESSION_FILE).as_posix()
-
-
-def _chunk_path(storage: LocalStorage, session: UploadSession, index: int) -> Path:
-    return storage.path(
-        session.project_id, UPLOADS_DIR, session.upload_id, UPLOAD_CHUNKS_DIR, CHUNK_FILE_FORMAT.format(index=index)
-    )
-
-
-def _save(storage: LocalStorage, session: UploadSession) -> None:
-    storage.write_json(session.project_id, _session_name(session.upload_id), session.model_dump(mode=JSON_DUMP_MODE))

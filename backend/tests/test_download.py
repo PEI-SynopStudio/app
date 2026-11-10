@@ -1,13 +1,14 @@
 import shutil
+import uuid
 
 import pytest
 
-from app.core.config import IngestionStage, SourceType
-from app.services.projects.projects import create_project
+from app.core.config import JobStatusEnum
+from app.schemas.job import IngestionParams, JobRequestMessage
 from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import download_youtube_video, inspect_media
-from app.services.video.metadata import get_technical_metadata
-from app.services.workflow.ingestion_pipeline import IngestionJob, run_ingestion
+from app.services.workflow.ingestion_pipeline import run_ingestion
+from in_memory_object_storage import InMemoryObjectStorage
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -36,13 +37,13 @@ def test_download_youtube_time_range(tmp_path):
 def test_pipeline_ingests_youtube_time_range(tmp_path):
     """FR02 acceptance: a valid YouTube URL is staged without manual steps (needs network)."""
     storage = LocalStorage(tmp_path / "media")
-    project = create_project(storage, "Sample", licence_confirmed=True, authorship_confirmed=True)
-    job = IngestionJob(
-        project_id=project.id, source_type=SourceType.URL, source=SAMPLE_URL,
-        start_time="00:01:07", end_time="00:01:27",
+    request = JobRequestMessage(
+        job_id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        parameters=IngestionParams(source_url=SAMPLE_URL, time_start="00:01:07", time_end="00:01:27"),
     )
 
-    status = run_ingestion(storage, job)
+    final = run_ingestion(storage, InMemoryObjectStorage(), request, lambda event: None)
 
-    assert status.stage == IngestionStage.COMPLETED, status.error
-    assert get_technical_metadata(storage, project.id).source == SAMPLE_URL
+    assert final.status == JobStatusEnum.COMPLETED, final.error_message
+    assert final.output["source"] == SAMPLE_URL

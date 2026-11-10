@@ -4,13 +4,10 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.core.config import (
-    JSON_DUMP_MODE,
-    METADATA_FILE,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
     SourceType,
 )
-from app.services.storage.local import LocalStorage
 from app.services.video.ingestion import MediaInfo
 
 
@@ -24,6 +21,7 @@ class TechnicalMetadata(BaseModel):
     height: Optional[int] = None
     aspect_ratio: Optional[str] = None
     frame_rate: Optional[float] = None
+    is_vfr: Optional[bool] = None
     video_codec: str
     audio_codec: str
     sample_rate: Optional[int] = None
@@ -31,9 +29,20 @@ class TechnicalMetadata(BaseModel):
     created_at: datetime
 
 
+class IngestionOutput(TechnicalMetadata):
+    """What a finished ingestion reports in its completed event; keys are relative to the project."""
+    source_key: str
+    proxy_key: str
+    audio_key: str
+    waveform_key: str
+    keyframes_key: str
+    # Where the kept part really starts in an upload cut to a time range; None when it was not cut.
+    time_start_seconds: Optional[float] = None
+
+
 # Collect the technical metadata of the original source from its inspection result.
 # Source: MS2 FR02 – Step 6 (runtime, dimensions, aspect ratio, frame rate, sample rate, source URL or file name).
-def build_technical_metadata(media: MediaInfo, source_type: SourceType, source: str) -> TechnicalMetadata:
+def build_technical_metadata(media: MediaInfo, is_vfr: bool, source_type: SourceType, source: str) -> TechnicalMetadata:
     """Build the metadata record; `source` is the original URL or the uploaded file name."""
     video = media.streams_of(STREAM_TYPE_VIDEO)[0]
     audio = media.streams_of(STREAM_TYPE_AUDIO)[0]
@@ -47,22 +56,10 @@ def build_technical_metadata(media: MediaInfo, source_type: SourceType, source: 
         height=video.height,
         aspect_ratio=video.aspect_ratio,
         frame_rate=video.frame_rate,
+        is_vfr=is_vfr,
         video_codec=video.codec_name,
         audio_codec=audio.codec_name,
         sample_rate=audio.sample_rate,
         channels=audio.channels,
         created_at=datetime.now(timezone.utc),
     )
-
-
-def save_technical_metadata(storage: LocalStorage, project_id: str, metadata: TechnicalMetadata) -> None:
-    storage.write_json(project_id, METADATA_FILE, metadata.model_dump(mode=JSON_DUMP_MODE))
-
-
-def clear_technical_metadata(storage: LocalStorage, project_id: str) -> None:
-    storage.delete(project_id, METADATA_FILE)
-
-
-def get_technical_metadata(storage: LocalStorage, project_id: str) -> Optional[TechnicalMetadata]:
-    data = storage.read_json(project_id, METADATA_FILE)
-    return TechnicalMetadata.model_validate(data) if data is not None else None

@@ -1,9 +1,17 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import ingestion, projects, uploads
+from app.api import ingestion, jobs, progress, projects, uploads
+from app.api.errors import storage_unavailable
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
+from app.database.session import get_session_factory
+from app.services.storage.object_storage import ObjectStorageError, get_object_storage
+from app.services.workflow.event_consumer import JobEventConsumer
+from app.services.workflow.progress_hub import get_progress_hub
+from app.services.workflow.sweeper import run_periodic_sweep
 
 
 def _configure_logging() -> None:
@@ -16,11 +24,27 @@ def _configure_logging() -> None:
         logger.addHandler(handler)
 
 
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    hub = get_progress_hub()
+    tasks = [
+        asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub).run()),
+        asyncio.create_task(run_periodic_sweep(get_session_factory(), get_object_storage, hub)),
+    ]
+    yield
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 _configure_logging()
-app = FastAPI(title=APP_TITLE)
+app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
+app.add_exception_handler(ObjectStorageError, storage_unavailable)
 app.include_router(projects.router)
 app.include_router(ingestion.router)
 app.include_router(uploads.router)
+app.include_router(jobs.router)
+app.include_router(progress.router)
 
 @app.get(HEALTH_ROUTE)
 def health():

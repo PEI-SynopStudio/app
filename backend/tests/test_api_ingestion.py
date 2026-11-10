@@ -4,34 +4,40 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import IngestionStage
+from app.core.config import MediaAssetStatus, SourceType
+from app.core.exceptions import JobDispatchError
+from app.database.models import AudioTrack, MediaAsset
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import get_object_storage
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
-from app.services.workflow.dispatcher import (
-    IngestionAlreadyRunningError,
-    InProcessDispatcher,
-    JobDispatcher,
-    get_dispatcher,
-)
-from app.services.workflow.status import set_stage
+from app.services.workflow.dispatcher import JobDispatcher
+from app.services.workflow.rabbitmq import get_dispatcher
+from in_memory_object_storage import InMemoryObjectStorage
+from in_process_dispatcher import InProcessDispatcher
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 JOIN_TIMEOUT_SECONDS = 60
+PROJECT_BODY = {
+    "title": "Debate",
+    "author": "University of Aveiro",
+    "speakers": ["Ana"],
+    "recording_date": "2026-10-01",
+    "license_type": "creative_commons",
+    "copyright_notice": "CC BY 4.0",
+    "authorship_confirmed": True,
+}
 
 
 class RecordingDispatcher(JobDispatcher):
     """Accepts jobs without running them, so endpoint tests stay fast and offline."""
 
-    def __init__(self, storage):
-        self.storage, self.jobs = storage, []
+    def __init__(self):
+        self.requests = []
 
-    def dispatch(self, job):
-        if any(queued.project_id == job.project_id for queued in self.jobs):
-            raise IngestionAlreadyRunningError("already running")
-        self.jobs.append(job)
-        return set_stage(self.storage, job.project_id, IngestionStage.QUEUED)
+    def dispatch(self, request):
+        self.requests.append(request)
 
 
 @pytest.fixture
@@ -40,24 +46,27 @@ def storage(tmp_path):
 
 
 @pytest.fixture
-def dispatcher(storage):
-    return RecordingDispatcher(storage)
+def dispatcher():
+    return RecordingDispatcher()
 
 
 @pytest.fixture
-def client(storage, dispatcher):
+def client(storage, dispatcher, db_override):
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def live(storage):
-    """Client wired to the real InProcessDispatcher; yields (client, dispatcher, published events)."""
+def live(storage, db_override, session_factory):
+    """Client wired to the in-process stand-in; yields (client, dispatcher, published events)."""
     events = []
-    dispatcher = InProcessDispatcher(storage, publish_event=events.append)
+    object_storage = InMemoryObjectStorage()
+    dispatcher = InProcessDispatcher(storage, object_storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
@@ -73,16 +82,19 @@ def fake_youtube(monkeypatch):
         )
         monkeypatch.setattr(
             ingestion_pipeline, "download_youtube_video",
-            lambda url, output_path, start_time, end_time: shutil.copy(sample, output_path),
+            lambda url, output_path, start_time, end_time, on_progress: shutil.copy(sample, output_path),
         )
 
     return install
 
 
+class UnreachableBrokerDispatcher(JobDispatcher):
+    def dispatch(self, request):
+        raise JobDispatchError("The job could not be queued; please try again.")
+
+
 def new_project(client, licence=True):
-    response = client.post(
-        "/projects", json={"title": "Debate", "licence_confirmed": licence, "authorship_confirmed": True}
-    )
+    response = client.post("/projects", json={**PROJECT_BODY, "licence_confirmed": licence})
     return response.json()["id"]
 
 
@@ -95,15 +107,14 @@ def test_url_ingestion_is_accepted_and_queued(client, dispatcher):
     )
 
     assert response.status_code == 202
-    assert response.json()["stage"] == "queued"
-    job = dispatcher.jobs[0]
-    assert (job.source, job.start_time, job.end_time) == (SAMPLE_URL, "00:01:07", "00:01:27")
+    assert response.json()["status"] == "queued"
+    params = dispatcher.requests[0].parameters
+    assert (str(params.source_url), params.time_start, params.time_end) == (SAMPLE_URL, "00:01:07", "00:01:27")
 
 
 @pytest.mark.parametrize("body, message", [
     ({"url": "https://example.com/video.mp4"}, "domain not allowed"),
     ({"url": "not a url"}, "Invalid URL"),
-    ({"url": SAMPLE_URL, "start_time": "00:01:00"}, "Both start and end"),
     ({"url": SAMPLE_URL, "start_time": "00:02:00", "end_time": "00:01:00"}, "Invalid time range"),
 ])
 def test_invalid_url_request_is_rejected(client, dispatcher, body, message):
@@ -113,7 +124,19 @@ def test_invalid_url_request_is_rejected(client, dispatcher, body, message):
 
     assert response.status_code == 422
     assert message in response.json()["detail"]
-    assert dispatcher.jobs == []
+    assert dispatcher.requests == []
+
+
+def test_url_ingestion_accepts_an_open_ended_time_range(client, dispatcher):
+    project_id = new_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL, "start_time": "00:01:00"}
+    )
+
+    assert response.status_code == 202
+    params = dispatcher.requests[0].parameters
+    assert (params.time_start, params.time_end) == ("00:01:00", None)
 
 
 def test_url_ingestion_without_licence_is_forbidden(live):
@@ -171,10 +194,12 @@ def test_url_ingestion_end_to_end(live, fake_youtube, make_sample):
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
     assert accepted.status_code == 202
-    assert body["status"]["stage"] == "completed"
+    assert (body["job"]["status"], body["job"]["progress"], body["job"]["message"]) == (
+        "completed", 100, "Ingestion completed"
+    )
     assert body["metadata"]["source"] == SAMPLE_URL
     assert body["metadata"]["aspect_ratio"] == "4:3"
-    assert [event.project_id for event in events] == [project_id]
+    assert [str(event.project_id) for event in events] == [project_id]
 
 
 def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample):
@@ -186,8 +211,72 @@ def test_failed_ingestion_reports_error_details(live, fake_youtube, make_sample)
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
     body = client.get(f"/projects/{project_id}/ingestion").json()
 
-    assert body["status"]["stage"] == "ingestion_failed"
-    assert body["status"]["error"]["code"] == "media_rejected"
-    assert "silent" in body["status"]["error"]["message"]
+    assert (body["job"]["status"], body["job"]["error_code"]) == ("failed", "silent_audio")
+    assert "silent" in body["job"]["error_message"]
+    assert client.get(f"/projects/{project_id}").json()["status"] == "ingestion_failed"
     assert body["metadata"] is None
     assert events == []
+
+
+def test_unreachable_broker_answers_503_and_fails_the_job(client):
+    project_id = new_project(client)
+    app.dependency_overrides[get_dispatcher] = lambda: UnreachableBrokerDispatcher()
+
+    response = client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "The job could not be queued; please try again."
+    job = client.get(f"/projects/{project_id}/ingestion").json()["job"]
+    assert (job["status"], job["error_code"]) == ("failed", "internal_error")
+
+
+def finished_video(db, project_id, status=MediaAssetStatus.READY):
+    asset = MediaAsset(
+        project_id=uuid.UUID(project_id),
+        source_type=SourceType.UPLOAD,
+        file_name="lecture.mp4",
+        status=status,
+        proxy_key="proxy/proxy.mp4",
+    )
+    db.add(asset)
+    db.flush()
+    db.add(AudioTrack(
+        media_asset_id=asset.id,
+        sample_rate=16000,
+        channels=1,
+        format="wav",
+        storage_key="audio/audio.wav",
+        waveform_key="analysis/waveform.json",
+    ))
+    db.commit()
+
+
+def test_media_links_are_temporary_and_name_the_right_files(client, db):
+    project_id = new_project(client)
+    finished_video(db, project_id)
+
+    response = client.get(f"/projects/{project_id}/media")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "proxy_url": f"https://storage.test/{project_id}/proxy/proxy.mp4?type=video/mp4&expires=3600",
+        "waveform_url": f"https://storage.test/{project_id}/analysis/waveform.json?type=application/json&expires=3600",
+        "expires_in_seconds": 3600,
+    }
+
+
+def test_media_links_wait_for_a_finished_video(client, db):
+    project_id = new_project(client)
+    assert client.get(f"/projects/{project_id}/media").status_code == 404
+
+    finished_video(db, project_id, status=MediaAssetStatus.PROCESSING)
+
+    assert client.get(f"/projects/{project_id}/media").status_code == 404
+
+
+def test_media_links_of_an_unknown_project_are_not_found(client):
+    assert client.get(f"/projects/{uuid.uuid4()}/media").status_code == 404
+
+
+def test_media_links_reject_an_invalid_project_id(client):
+    assert client.get("/projects/not-a-uuid/media").status_code == 422

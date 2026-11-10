@@ -94,13 +94,15 @@ def test_validate_time_range_is_optional():
     ("00:01:07", "00:01:27", (67, 87)),
     ("30", "90", (30, 90)),
     ("0", "00:10:00", (0, 600)),
+    ("00:09:00", None, (540, 600)),
+    (None, "00:01:00", (0, 60)),
 ])
 def test_validate_time_range_parses_timecodes(start, end, expected):
     assert validate_time_range(start, end, 600) == expected
 
 
 @pytest.mark.parametrize("start, end, message", [
-    ("00:01:00", None, "Both start and end"),
+    ("00:11:00", None, "Invalid time range"),
     ("abc", "00:01:00", "Invalid timecode"),
     ("00:02:00", "00:01:00", "Invalid time range"),
     ("00:01:00", "00:11:00", "Invalid time range"),

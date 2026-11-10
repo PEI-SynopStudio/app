@@ -1,15 +1,18 @@
+import heapq
 import math
 import sys
 import wave
 from array import array
+from collections import deque
 from fractions import Fraction
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Tuple
 
 import av
+from av.video.frame import PictureType
 from pydantic import BaseModel
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError, download_range_func, parse_duration
+from yt_dlp.utils import DownloadError, download_range_func
 
 from app.core.config import (
     ALLOWED_CONTAINER_FORMATS,
@@ -19,29 +22,38 @@ from app.core.config import (
     AUDIO_LAYOUT,
     AUDIO_SAMPLE_FORMAT,
     AUDIO_SAMPLE_RATE,
+    CONTAINERS_WITHOUT_PRESENTATION_TIMES,
     DECIBEL_BASE,
     DECIBEL_FACTOR,
     ERROR_AUDIO_EXTRACTION_FAILED,
+    ERROR_CORRUPTED_PACKETS,
+    ERROR_CUT_FAILED,
     ERROR_DOWNLOAD_FAILED,
     ERROR_FILE_NOT_FOUND,
+    ERROR_KEYFRAME_INDEX_FAILED,
     ERROR_NO_AUDIO_STREAM,
     ERROR_NO_VIDEO_STREAM,
     ERROR_PROXY_FAILED,
     ERROR_SILENT_AUDIO,
+    ERROR_TRUNCATED_MEDIA,
     ERROR_UNREADABLE_MEDIA,
     ERROR_UNSUPPORTED_AUDIO_CODEC,
     ERROR_UNSUPPORTED_CONTAINER,
     ERROR_UNSUPPORTED_VIDEO_CODEC,
     EVEN_DIMENSION,
+    KEYFRAME_TIME_DECIMALS,
     LIST_SEPARATOR,
     MEDIA_WRITE_MODE,
     PCM_FULL_SCALE,
     PCM_SAMPLE_TYPECODE,
+    PROGRESS_MAX,
+    PROGRESS_MIN,
     PROXY_AUDIO_BITRATE,
     PROXY_AUDIO_CODEC,
     PROXY_AUDIO_FRAME_SIZE,
     PROXY_AUDIO_SAMPLE_FORMAT,
     PROXY_CONTAINER,
+    PROXY_KEYFRAME_INTERVAL_SECONDS,
     PROXY_MAX_HEIGHT,
     PROXY_MUXER_OPTIONS,
     PROXY_PIXEL_FORMAT,
@@ -51,16 +63,33 @@ from app.core.config import (
     SILENCE_WINDOW_SECONDS,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_VIDEO,
+    TRUNCATION_TOLERANCE_SECONDS,
+    VFR_INTERVAL_TOLERANCE,
+    VFR_MIN_IRREGULAR_SHARE,
+    VFR_REORDER_WINDOW,
+    VFR_TIMESTAMP_ROUNDING_SECONDS,
+    VIDEO_START_SECONDS,
     WAV_BYTE_ORDER,
     WAV_READ_MODE,
+    WAVEFORM_DECIMALS,
+    WAVEFORM_WINDOW_SECONDS,
+    YTDLP_DOWNLOADING_STATUS,
+    YTDLP_FINISHED_STATUS,
     YTDLP_FORMAT_SORT,
     YTDLP_FORMAT_TEMPLATE,
     YTDLP_MAX_HEIGHT,
     YTDLP_OUTPUT_CONTAINER,
     YTDLP_OUTPUT_TEMPLATE,
     YTDLP_REMUXER,
+    JobErrorCodeEnum,
     get_settings,
 )
+from app.core.exceptions import MediaProcessingError, MediaRejectedError
+from app.schemas.timecode import parse_time
+
+
+# Receives the progress of a long operation, from 0 to 100; it is called often, so it must be cheap.
+ProgressCallback = Callable[[float], None]
 
 
 class StreamInfo(BaseModel):
@@ -73,6 +102,21 @@ class StreamInfo(BaseModel):
     frame_rate: Optional[float] = None
     sample_rate: Optional[int] = None
     channels: Optional[int] = None
+
+
+class Waveform(BaseModel):
+    window_seconds: float
+    peaks: List[float]
+    rms: List[float]
+
+
+class MediaCut(BaseModel):
+    path: Path
+    start_seconds: float
+
+
+class KeyframeIndex(BaseModel):
+    times_seconds: List[float]
 
 
 class MediaInfo(BaseModel):
@@ -120,7 +164,7 @@ def inspect_media(input_path: Path) -> MediaInfo:
         raise RuntimeError(ERROR_UNREADABLE_MEDIA.format(details=exc)) from exc
 
     if not media.streams_of(STREAM_TYPE_AUDIO):
-        raise ValueError(ERROR_NO_AUDIO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
 
     return media
 
@@ -133,37 +177,135 @@ def _display_aspect_ratio(width: int, height: int, sample_aspect_ratio: Optional
     return ASPECT_RATIO_FORMAT.format(numerator=ratio.numerator, denominator=ratio.denominator)
 
 
+class PacketScan(BaseModel):
+    is_vfr: bool
+    corrupted_packets: int
+    missing_seconds: Optional[float] = None
+
+
+class _FrameIntervals:
+    """Counts changes between consecutive frame intervals, in presentation order and constant memory."""
+
+    def __init__(self, rounding_ticks: float) -> None:
+        self._rounding_ticks = rounding_ticks
+        self._pending: List[int] = []
+        self._last_pts: Optional[int] = None
+        self._last_interval: Optional[int] = None
+        self._compared = 0
+        self._irregular = 0
+
+    def add(self, pts: int) -> None:
+        heapq.heappush(self._pending, pts)
+        if len(self._pending) > VFR_REORDER_WINDOW:
+            self._advance(heapq.heappop(self._pending))
+
+    def is_variable(self) -> bool:
+        while self._pending:
+            self._advance(heapq.heappop(self._pending))
+        return self._irregular > self._compared * VFR_MIN_IRREGULAR_SHARE
+
+    def _advance(self, pts: int) -> None:
+        if self._last_pts is not None:
+            interval = pts - self._last_pts
+            if self._last_interval is not None:
+                self._compared += 1
+                tolerance = max(self._rounding_ticks, min(interval, self._last_interval) * VFR_INTERVAL_TOLERANCE)
+                if abs(interval - self._last_interval) > tolerance:
+                    self._irregular += 1
+            self._last_interval = interval
+        self._last_pts = pts
+
+
+# Read every packet without decoding: frame timing, packets flagged as damaged and where the data really ends.
+# Source: MS2 FR02 – Step 3 (corrupted packets, variable frame rate).
+def scan_packets(input_path: Path) -> PacketScan:
+    """Measure the source in one streaming pass; `missing_seconds` is None when the file declares no duration."""
+    if not input_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=input_path))
+
+    corrupted = 0
+    data_end: Optional[Fraction] = None
+    try:
+        with av.open(str(input_path)) as container:
+            video = container.streams.video[0]
+            intervals = _FrameIntervals(VFR_TIMESTAMP_ROUNDING_SECONDS / float(video.time_base))
+            for packet in container.demux():
+                # Each stream ends with an empty packet that only flushes the decoder.
+                if not packet.size:
+                    continue
+                if packet.is_corrupt:
+                    corrupted += 1
+                if packet.pts is None:
+                    continue
+                if packet.stream.index == video.index:
+                    intervals.add(packet.pts)
+                packet_end = (packet.pts + (packet.duration or 0)) * packet.time_base
+                data_end = packet_end if data_end is None else max(data_end, packet_end)
+
+            missing = None
+            if container.duration and data_end is not None:
+                declared_end = Fraction((container.start_time or 0) + container.duration, av.time_base)
+                missing = float(declared_end - data_end)
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_UNREADABLE_MEDIA.format(details=exc)) from exc
+
+    return PacketScan(is_vfr=intervals.is_variable(), corrupted_packets=corrupted, missing_seconds=missing)
+
+
+# Reject sources with packets flagged as damaged or whose data ends before the declared duration.
+# Source: MS2 FR02 – Step 3 (corrupted packets; unreadable files rejected with details).
+def check_packet_integrity(scan: PacketScan) -> None:
+    """A variable frame rate is only recorded, never rejected."""
+    if scan.corrupted_packets:
+        raise MediaRejectedError(
+            JobErrorCodeEnum.CORRUPTED_MEDIA, ERROR_CORRUPTED_PACKETS.format(count=scan.corrupted_packets)
+        )
+    if scan.missing_seconds is not None and scan.missing_seconds > TRUNCATION_TOLERANCE_SECONDS:
+        raise MediaRejectedError(
+            JobErrorCodeEnum.CORRUPTED_MEDIA, ERROR_TRUNCATED_MEDIA.format(missing=scan.missing_seconds)
+        )
+
+
 # Reject containers and codecs outside the FR02 whitelist (checked on the server, not only in the client).
 # Source: MS2 FR02 – Inputs (MP4, MOV, MKV, WebM, AVI; H.264, H.265, VP9, AV1; AAC, MP3, Opus, PCM).
 def check_supported_formats(media: MediaInfo) -> None:
     """Raise ValueError when the container, the first video stream or the first audio stream is not allowed."""
     if not set(media.format_name.split(LIST_SEPARATOR)) & set(ALLOWED_CONTAINER_FORMATS):
-        raise ValueError(ERROR_UNSUPPORTED_CONTAINER.format(format_name=media.format_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_CONTAINER.format(format_name=media.format_name)
+        )
 
     videos, audios = media.streams_of(STREAM_TYPE_VIDEO), media.streams_of(STREAM_TYPE_AUDIO)
     if not videos:
-        raise ValueError(ERROR_NO_VIDEO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_NO_VIDEO_STREAM)
     if not audios:
-        raise ValueError(ERROR_NO_AUDIO_STREAM)
+        raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
 
     settings = get_settings()
     if videos[0].codec_name not in settings.allowed_video_codecs:
-        raise ValueError(ERROR_UNSUPPORTED_VIDEO_CODEC.format(codec=videos[0].codec_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_VIDEO_CODEC.format(codec=videos[0].codec_name)
+        )
     if audios[0].codec_name not in settings.allowed_audio_codecs:
-        raise ValueError(ERROR_UNSUPPORTED_AUDIO_CODEC.format(codec=audios[0].codec_name))
+        raise MediaRejectedError(
+            JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_UNSUPPORTED_AUDIO_CODEC.format(codec=audios[0].codec_name)
+        )
 
 
 # Extract audio and normalize to 16 kHz, 16-bit mono PCM WAV (Whisper input) with PyAV.
 # Source: MS2 FR02 – Step 4 (Audio Extraction and Normalization).
-def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
+def extract_normalized_audio(
+    video_path: Path, output_wav_path: Path, on_progress: Optional[ProgressCallback] = None
+) -> Path:
     """Extract and normalize audio stream to uncompressed 16 kHz, 16-bit mono PCM WAV."""
     output_wav_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         with av.open(str(video_path)) as source:
             if not source.streams.audio:
-                raise ValueError(ERROR_NO_AUDIO_STREAM)
+                raise MediaRejectedError(JobErrorCodeEnum.NO_AUDIO_TRACK, ERROR_NO_AUDIO_STREAM)
             input_stream = source.streams.audio[0]
+            duration = _duration_seconds(source)
             resampler = av.AudioResampler(
                 format=AUDIO_SAMPLE_FORMAT, layout=AUDIO_LAYOUT, rate=AUDIO_SAMPLE_RATE
             )
@@ -171,6 +313,7 @@ def extract_normalized_audio(video_path: Path, output_wav_path: Path) -> Path:
             with av.open(str(output_wav_path), MEDIA_WRITE_MODE, format=AUDIO_CONTAINER) as target:
                 output_stream = target.add_stream(AUDIO_CODEC, rate=AUDIO_SAMPLE_RATE, layout=AUDIO_LAYOUT)
                 for frame in source.decode(input_stream):
+                    _report_position(on_progress, frame.time, duration)
                     for resampled in resampler.resample(frame):
                         target.mux(output_stream.encode(resampled))
                 # Flush the resampler and the encoder so no trailing samples are lost.
@@ -190,37 +333,63 @@ def check_audio_not_silent(wav_path: Path) -> None:
 
     Stops at the first loud window, so normal recordings are not read to the end.
     """
+    # Compare sums of squares with the threshold converted to linear RMS (no sqrt/log per window).
+    threshold_rms = PCM_FULL_SCALE * DECIBEL_BASE ** (SILENCE_THRESHOLD_DBFS / DECIBEL_FACTOR)
+    for samples in _read_pcm_windows(wav_path, SILENCE_WINDOW_SECONDS):
+        if math.fsum(sample * sample for sample in samples) > threshold_rms**2 * len(samples):
+            return
+
+    raise MediaRejectedError(JobErrorCodeEnum.SILENT_AUDIO, ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
+
+
+# Measure the peak and the RMS level of each short window of the normalized audio and save them as JSON.
+# Source: MS2 FR02 – Step 4 (waveform and volume profile).
+def generate_waveform(wav_path: Path, output_json_path: Path) -> Path:
+    """Write `peaks` (waveform) and `rms` (volume profile), both from 0 to 1 of full scale, one value per window."""
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    peaks, rms = [], []
+    for samples in _read_pcm_windows(wav_path, WAVEFORM_WINDOW_SECONDS):
+        peaks.append(round(max(max(samples), -min(samples)) / PCM_FULL_SCALE, WAVEFORM_DECIMALS))
+        energy = math.fsum(sample * sample for sample in samples) / len(samples)
+        rms.append(round(math.sqrt(energy) / PCM_FULL_SCALE, WAVEFORM_DECIMALS))
+
+    waveform = Waveform(window_seconds=WAVEFORM_WINDOW_SECONDS, peaks=peaks, rms=rms)
+    output_json_path.write_text(waveform.model_dump_json())
+    return output_json_path
+
+
+def _read_pcm_windows(wav_path: Path, window_seconds: float) -> Iterator[array]:
+    """Yield the samples of a 16-bit PCM WAV in consecutive windows, without loading the whole track."""
     if not wav_path.exists():
         raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=wav_path))
 
-    # Compare sums of squares with the threshold converted to linear RMS (no sqrt/log per window).
-    threshold_rms = PCM_FULL_SCALE * DECIBEL_BASE ** (SILENCE_THRESHOLD_DBFS / DECIBEL_FACTOR)
     with wave.open(str(wav_path), WAV_READ_MODE) as wav:
-        window_frames = wav.getframerate() * SILENCE_WINDOW_SECONDS
+        window_frames = round(wav.getframerate() * window_seconds)
         while True:
             samples = array(PCM_SAMPLE_TYPECODE, wav.readframes(window_frames))
             if not samples:
-                break
+                return
             if sys.byteorder != WAV_BYTE_ORDER:
                 samples.byteswap()
-            if math.fsum(sample * sample for sample in samples) > threshold_rms**2 * len(samples):
-                return
-
-    raise ValueError(ERROR_SILENT_AUDIO.format(threshold=SILENCE_THRESHOLD_DBFS))
+            yield samples
 
 
-# Generate a lightweight H.264/AAC proxy (max 720p, +faststart) with PyAV for web playback and scrubbing.
+# Generate a lightweight H.264/AAC proxy (max 720p, +faststart, regular keyframes) for web playback and scrubbing.
 # Source: MS2 FR02 – Step 5 (Visual Proxy); +faststart from the professor's `find_me.py`.
-def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
+def generate_proxy_video(
+    video_path: Path, output_proxy_path: Path, on_progress: Optional[ProgressCallback] = None
+) -> Path:
     """Generate a lightweight proxy video (H.264, max 720p, AAC, +faststart) for timeline scrubbing and web preview."""
     output_proxy_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         with av.open(str(video_path)) as source:
             if not source.streams.video:
-                raise ValueError(ERROR_NO_VIDEO_STREAM)
+                raise MediaRejectedError(JobErrorCodeEnum.UNSUPPORTED_FORMAT, ERROR_NO_VIDEO_STREAM)
             video_in = source.streams.video[0]
             audio_in = source.streams.audio[0] if source.streams.audio else None
+            duration = _duration_seconds(source)
             width, height = _proxy_size(video_in.codec_context.width, video_in.codec_context.height)
 
             with av.open(
@@ -229,6 +398,8 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                 video_out = target.add_stream(PROXY_VIDEO_CODEC, rate=video_in.average_rate)
                 video_out.width, video_out.height, video_out.pix_fmt = width, height, PROXY_PIXEL_FORMAT
                 video_out.options = dict(PROXY_VIDEO_OPTIONS)
+                # With the default 1/frame_rate, close frames of a variable-frame-rate source would share a timestamp.
+                video_out.codec_context.time_base = video_in.time_base
 
                 input_streams = [video_in]
                 audio_out = resampler = None
@@ -244,13 +415,35 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
                     )
                     input_streams.append(audio_in)
 
+                next_keyframe_time = VIDEO_START_SECONDS
+                # Without presentation times, frames come out in display order but with shuffled timestamps,
+                # so each frame takes the next decode time instead.
+                decode_times: Optional[Deque[int]] = None
+                if source.format.name in CONTAINERS_WITHOUT_PRESENTATION_TIMES:
+                    decode_times = deque()
+
                 # Single pass over the source: packets are demuxed in order and routed by stream type.
                 for packet in source.demux(*input_streams):
+                    if decode_times is not None and packet.stream.type == STREAM_TYPE_VIDEO and packet.size:
+                        decode_times.append(packet.dts)
                     for frame in packet.decode():
                         if packet.stream.type == STREAM_TYPE_VIDEO:
+                            if decode_times is not None:
+                                frame.pts = decode_times.popleft()
                             scaled = frame.reformat(width=width, height=height, format=PROXY_PIXEL_FORMAT)
+                            # Counted in time, not frames, so it also holds at a variable frame rate. Clearing the
+                            # type matters: a frame that needs no scaling still carries the type it had in the source.
+                            scaled.pict_type = PictureType.NONE
+                            if scaled.time is not None and scaled.time >= next_keyframe_time:
+                                scaled.pict_type = PictureType.I
+                                next_keyframe_time = scaled.time + PROXY_KEYFRAME_INTERVAL_SECONDS
                             target.mux(video_out.encode(scaled))
+                            _report_position(on_progress, scaled.time, duration)
                         else:
+                            # AVI can use one tick per packet, too coarse for the shorter chunks of the resampler.
+                            if frame.pts is not None:
+                                frame.pts = round(frame.pts * frame.time_base * sample_rate)
+                                frame.time_base = Fraction(1, sample_rate)
                             for chunk in resampler.resample(frame):
                                 target.mux(audio_out.encode(chunk))
 
@@ -266,12 +459,107 @@ def generate_proxy_video(video_path: Path, output_proxy_path: Path) -> Path:
     return output_proxy_path
 
 
+# List the keyframe times of the proxy, read from its packets without decoding, and save them as JSON.
+# Source: MS2 FR02 – Step 5 (keyframe index).
+def generate_keyframe_index(proxy_path: Path, output_json_path: Path) -> Path:
+    """Write `times_seconds`, the sorted presentation time of each keyframe of the proxy."""
+    if not proxy_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=proxy_path))
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with av.open(str(proxy_path)) as container:
+            times = sorted(
+                round(float(packet.pts * packet.time_base), KEYFRAME_TIME_DECIMALS)
+                for packet in container.demux(container.streams.video[0])
+                if packet.size and packet.is_keyframe and packet.pts is not None
+            )
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_KEYFRAME_INDEX_FAILED.format(details=exc)) from exc
+
+    output_json_path.write_text(KeyframeIndex(times_seconds=times).model_dump_json())
+    return output_json_path
+
+
+def _duration_seconds(container: av.container.InputContainer) -> Optional[float]:
+    return container.duration / av.time_base if container.duration else None
+
+
+def _report_position(
+    on_progress: Optional[ProgressCallback], position: Optional[float], duration: Optional[float]
+) -> None:
+    """Report how far a media loop is; nothing is reported when the position or the duration is unknown."""
+    if on_progress is not None and position is not None and duration:
+        on_progress(_percent(position, duration))
+
+
+def _percent(done: float, total: float) -> float:
+    return max(PROGRESS_MIN, min(PROGRESS_MAX, done / total * PROGRESS_MAX))
+
+
 def _proxy_size(width: int, height: int) -> Tuple[int, int]:
     """Scale to at most PROXY_MAX_HEIGHT keeping the aspect ratio; H.264 needs even dimensions."""
     target_height = min(height, PROXY_MAX_HEIGHT)
     target_height -= target_height % EVEN_DIMENSION
     target_width = round(width * target_height / height / EVEN_DIMENSION) * EVEN_DIMENSION
     return target_width, target_height
+
+
+# Copy a time range into a new file of the same format with PyAV, without re-encoding.
+# Source: MS2 FR02 – Inputs (optional start/end timecodes); US05.
+def cut_media(input_path: Path, output_path: Path, start_seconds: float, end_seconds: float) -> MediaCut:
+    """Keep the first video and audio streams from the last keyframe at or before the start until the end.
+
+    Without re-encoding the video can only begin on a keyframe, so `start_seconds` of the result is where the
+    copy really begins in the input; the time 0 of the output is that point.
+    """
+    if not input_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=input_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with av.open(str(input_path)) as source:
+            video_in, audio_in = source.streams.video[0], source.streams.audio[0]
+            offset = (source.start_time or 0) / av.time_base
+            cut_end = offset + end_seconds
+            source.seek(int((offset + start_seconds) * av.time_base), backward=True)
+
+            with av.open(str(output_path), MEDIA_WRITE_MODE) as target:
+                outputs = {
+                    video_in.index: target.add_stream_from_template(video_in),
+                    audio_in.index: target.add_stream_from_template(audio_in),
+                }
+                origin: Optional[float] = None
+                finished = set()
+                for packet in source.demux(video_in, audio_in):
+                    if not packet.size or packet.pts is None:
+                        continue
+                    packet_time = float(packet.pts * packet.time_base)
+                    if origin is None:
+                        if packet.stream.index != video_in.index or not packet.is_keyframe:
+                            continue
+                        origin = packet_time
+                    elif packet_time < origin:
+                        continue
+
+                    # Compared in decode order: a later frame shown before the end may depend on this packet.
+                    decode_ticks = packet.dts if packet.dts is not None else packet.pts
+                    if float(decode_ticks * packet.time_base) >= cut_end:
+                        finished.add(packet.stream.index)
+                        if len(finished) == len(outputs):
+                            break
+                        continue
+
+                    shift = round(origin / float(packet.time_base))
+                    packet.pts -= shift
+                    if packet.dts is not None:
+                        packet.dts -= shift
+                    packet.stream = outputs[packet.stream.index]
+                    target.mux(packet)
+    except av.FFmpegError as exc:
+        raise RuntimeError(ERROR_CUT_FAILED.format(details=exc)) from exc
+
+    return MediaCut(path=output_path, start_seconds=origin - offset if origin is not None else start_seconds)
 
 
 # Download a YouTube video, or only a time interval of it, to MP4 (max 1080p) with the yt-dlp API.
@@ -281,6 +569,7 @@ def download_youtube_video(
     output_path: Path,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> Path:
     """Download a video or a time range of it to an MP4 container (max 1080p) using the yt-dlp Python API."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -298,16 +587,36 @@ def download_youtube_video(
         "outtmpl": str(output_path.with_name(YTDLP_OUTPUT_TEMPLATE.format(stem=output_path.stem))),
     }
 
-    if start_time and end_time:
-        options["download_ranges"] = download_range_func(
-            None, [(parse_duration(start_time), parse_duration(end_time))]
-        )
+    if start_time or end_time:
+        start = float(parse_time(start_time)) if start_time else VIDEO_START_SECONDS
+        end = float(parse_time(end_time)) if end_time else math.inf
+        options["download_ranges"] = download_range_func(None, [(start, end)])
         options["force_keyframes_at_cuts"] = True
+
+    if on_progress is not None:
+        options["progress_hooks"] = [_download_progress_hook(on_progress)]
 
     try:
         with YoutubeDL(options) as ydl:
             ydl.download([url])
     except DownloadError as exc:
-        raise RuntimeError(ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
+        raise MediaProcessingError(JobErrorCodeEnum.SOURCE_UNAVAILABLE, ERROR_DOWNLOAD_FAILED.format(details=exc)) from exc
 
     return output_path.with_suffix(f".{YTDLP_OUTPUT_CONTAINER}")
+
+
+def _download_progress_hook(on_progress: ProgressCallback) -> Callable[[Dict[str, Any]], None]:
+    """yt-dlp restarts its counters for each file (video, then audio), so each file gets an equal share."""
+    finished_files = 0
+
+    def hook(report: Dict[str, Any]) -> None:
+        nonlocal finished_files
+        if report["status"] == YTDLP_FINISHED_STATUS:
+            finished_files += 1
+            return
+        total = report.get("total_bytes") or report.get("total_bytes_estimate")
+        if report["status"] == YTDLP_DOWNLOADING_STATUS and total:
+            files = len(report["info_dict"].get("requested_formats") or ()) or 1
+            on_progress(_percent(finished_files + report["downloaded_bytes"] / total, files))
+
+    return hook
