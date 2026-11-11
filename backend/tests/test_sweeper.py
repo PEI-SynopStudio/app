@@ -111,17 +111,6 @@ def test_download_stalled_past_its_limit_is_failed(db):
     assert stored(db, job).error_code == JobErrorCodeEnum.TIMEOUT
 
 
-def test_queued_job_is_not_swept(db):
-    """A queued job is only waiting for a free worker."""
-    job = queued_job(db)
-    job.updated_at = utc_now() - timedelta(days=2)
-    db.commit()
-
-    assert len(sweep_stalled_jobs(db)) == 0
-
-    assert stored(db, job).status == JobStatusEnum.QUEUED
-
-
 def test_swept_job_no_longer_blocks_its_project(db):
     job = running_job(db, silent_for=TWO_HOURS)
 
@@ -240,3 +229,24 @@ def test_periodic_sweep_survives_a_failed_round(monkeypatch, caplog):
         get_settings.cache_clear()
 
     assert "sweep failed" in caplog.text
+
+def test_recently_queued_job_not_swept(db):
+    job = queued_job(db)
+    job.updated_at = utc_now() - TWO_HOURS
+    db.commit()
+    
+    assert len(sweep_stalled_jobs(db)) == 0
+    assert stored(db, job).status == JobStatusEnum.QUEUED
+    
+
+def test_queued_job_stalled_past_limit_is_failed(db):
+    job = queued_job(db)
+    job.updated_at = utc_now() - timedelta(days=2)
+    db.commit()
+    
+    assert len(sweep_stalled_jobs(db)) == 1
+    swept = stored(db, job)
+    
+    assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
+    assert "never started" in swept.error_message
+    assert create_ingestion_job(db, str(job.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL) is not None
