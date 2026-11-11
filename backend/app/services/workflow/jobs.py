@@ -105,6 +105,18 @@ def queue_job(db: Session, job: Job) -> Job:
 def fail_job(db: Session, job: Job, error_code: JobErrorCodeEnum, error_message: str) -> Job:
     return _change_status(db, job, JobStatusEnum.FAILED, error_code, error_message)
 
+def cancel_job(db: Session, project_id: str, job_id: str) -> Job:
+    try:
+        parsed_id = uuid.UUID(job_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(ERROR_INVALID_JOB_ID.format(job_id=job_id))
+    
+    job = db.get(Job, parsed_id, with_for_update=True)
+    if job is None or str(job.project_id) != project_id:
+        raise JobNotFoundError()
+    
+    return _change_status(db, job, JobStatusEnum.CANCELLED)
+
 
 # Apply a worker event to the stored job, one event at a time per job.
 # Source: architecture §2 (workers publish results, the backend persists them); T3.13 job state machine.

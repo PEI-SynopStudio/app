@@ -35,6 +35,8 @@ def record_ingestion_outcome(db: Session, job: Job) -> None:
         _record_success(db, job, project, asset)
     elif job.status == JobStatusEnum.FAILED:
         _record_failure(db, job, project, asset)
+    elif job.status == JobStatusEnum.CANCELLED:
+        _record_cancellation(db, job, project, asset)
 
 
 def _record_success(db: Session, job: Job, project: Project, asset: Optional[MediaAsset]) -> None:
@@ -66,5 +68,16 @@ def _record_failure(db: Session, job: Job, project: Project, asset: Optional[Med
         db,
         project.id,
         AuditAction.INGESTION_FAILED,
+        {AUDIT_DETAIL_JOB_ID: str(job.id), AUDIT_DETAIL_ERROR_CODE: job.error_code.value},
+    )
+
+def _record_cancellation(db: Session, job: Job, project: Project, asset: Optional[MediaAsset]) -> None:
+    if asset is not None:
+        asset.status = MediaAssetStatus.FAILED
+    project.status = ProjectStatus.INGESTION_FAILED
+    record_audit(
+        db,
+        project.id,
+        AuditAction.INGESTION_CANCELLED,
         {AUDIT_DETAIL_JOB_ID: str(job.id), AUDIT_DETAIL_ERROR_CODE: job.error_code.value},
     )

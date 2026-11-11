@@ -13,6 +13,7 @@ DEFAULT_S3_ENDPOINT_URL = "http://seaweedfs:8333"
 DEFAULT_S3_ACCESS_KEY = "pei"
 DEFAULT_S3_SECRET_KEY = "pei"
 DEFAULT_S3_BUCKET = "synopstudio-media"
+
 # The address browsers use; signatures cover the host, so it cannot be the internal service name.
 DEFAULT_S3_PUBLIC_ENDPOINT_URL = "http://localhost:8333"
 DEFAULT_S3_SIGNED_URL_TTL_SECONDS = 3600
@@ -26,6 +27,7 @@ DEFAULT_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024**2
 DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_SWEEP_INTERVAL_SECONDS = 60
 DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
+
 # A download of a time range reports no progress, and a 4 h range can take as long as the video itself.
 DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
 DEFAULT_LOG_LEVEL = "INFO"
@@ -93,23 +95,32 @@ LOG_FORMAT = "%(levelname)s:     %(name)s - %(message)s"
 HEALTH_ROUTE = "/health"
 HEALTH_OK = "ok"
 ROUTE_ROOT = ""
+
 PROJECTS_ROUTE_PREFIX = "/projects"
 PROJECTS_ROUTE_TAG = "projects"
 PROJECT_ID_ROUTE = "/{project_id}"
+
 INGESTION_ROUTE_TAG = "ingestion"
 URL_INGESTION_ROUTE = "/{project_id}/ingestions/url"
 INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
+
 MEDIA_ROUTE = "/{project_id}/media"
 URL_MAX_LENGTH = 2048
 TIMECODE_MAX_LENGTH = 16
+
 ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
+
 UPLOADS_ROUTE = "/{project_id}/uploads"
 UPLOAD_ROUTE = "/{project_id}/uploads/{upload_id}"
 UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
 UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
+
 JOBS_ROUTE_TAG = "jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
+JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
+
+
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
@@ -509,6 +520,7 @@ class AuditAction(str, Enum):
     UPLOAD_STARTED = "upload.started"
     INGESTION_REQUESTED = "ingestion.requested"
     INGESTION_COMPLETED = "ingestion.completed"
+    INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
     PROJECT_DELETED = "project.deleted"
 
