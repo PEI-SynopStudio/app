@@ -13,8 +13,10 @@ from app.core.config import (
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
+    ERROR_JOB_QUEUED_STALLED,
     ERROR_JOB_STALLED,
     JOB_ACTIVE_INGESTION_INDEX,
+    JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
     ApplyOutcome,
@@ -141,11 +143,12 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
 def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
     """Only running jobs: a queued job is just waiting for a free worker. Returns the new state of the failed jobs."""
     failed = []
-    for job_id in db.scalars(select(Job.id).where(Job.status == JobStatusEnum.PROCESSING)).all():
+    for job_id in db.scalars(select(Job.id).where(Job.status.in_(JOB_ACTIVE_STATUSES))).all():
         # Locked and read again, so an event that arrives in the meantime is not overwritten.
         job = db.get(Job, job_id, with_for_update=True, populate_existing=True)
-        if job is not None and job.status == JobStatusEnum.PROCESSING and _has_stalled(job):
-            failed.append(JobStatusResponseSchema.model_validate(fail_job(db, job, JobErrorCodeEnum.TIMEOUT, ERROR_JOB_STALLED)))
+        if job is not None and job.status in JOB_ACTIVE_STATUSES and _has_stalled(job):
+            message = ERROR_JOB_STALLED if job.status == JobStatusEnum.PROCESSING else ERROR_JOB_QUEUED_STALLED
+            failed.append(JobStatusResponseSchema.model_validate(fail_job(db, job, JobErrorCodeEnum.TIMEOUT, message)))
         else:
             db.commit()
     return failed
@@ -153,8 +156,12 @@ def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
 
 def _has_stalled(job: Job) -> bool:
     settings = get_settings()
-    downloading = job.step == JobStepProcessingEnum.DOWNLOADING_MEDIA
-    limit = settings.job_download_stalled_after_seconds if downloading else settings.job_stalled_after_seconds
+    if job.status != JobStatusEnum.PROCESSING:
+        limit = settings.job_queued_stalled_after_seconds
+    elif job.step == JobStepProcessingEnum.DOWNLOADING_MEDIA:
+        limit = settings.job_download_stalled_after_seconds
+    else:
+        limit = settings.job_stalled_after_seconds
     return utc_now() - (job.last_event_at or job.updated_at) > timedelta(seconds=limit)
 
 
