@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 node_modules/
 dist/
-/.idea
+.pytest_cache
+.vscode

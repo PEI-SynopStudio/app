@@ -1,63 +1,51 @@
-# backend/app/main.py
-import os
-from typing import Optional
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, Header, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 
-from .db import Base, engine
-from . import models  # noqa: F401 — registers models with Base.metadata
-from .auth import router as auth_router, get_current_user
-from .models import User
-
-app = FastAPI(title="PEI API")
-
-BACKEND_AUTH_SECRET = os.getenv("BACKEND_AUTH_SECRET", "dev-secret-change-me")
-
-
-async def verify_backend_auth(x_backend_auth: Optional[str] = Header(None)) -> bool:
-    """Verify that the request comes from a trusted frontend."""
-    if not x_backend_auth or x_backend_auth != BACKEND_AUTH_SECRET:
-        raise HTTPException(status_code=403, detail="Forbidden: Invalid backend auth")
-    return True
+from app.api import ingestion, jobs, progress, projects, uploads
+from app.api.errors import storage_unavailable
+from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
+from app.database.session import get_session_factory
+from app.services.storage.object_storage import ObjectStorageError, get_object_storage
+from app.services.workflow.event_consumer import JobEventConsumer
+from app.services.workflow.progress_hub import get_progress_hub
+from app.services.workflow.sweeper import run_periodic_sweep
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def _configure_logging() -> None:
+    """Show the application's INFO logs (e.g. published events); uvicorn configures only its own loggers."""
+    logger = logging.getLogger(APP_LOGGER_NAME)
+    logger.setLevel(get_settings().log_level)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logger.addHandler(handler)
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    hub = get_progress_hub()
+    tasks = [
+        asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub).run()),
+        asyncio.create_task(run_periodic_sweep(get_session_factory(), get_object_storage, hub)),
+    ]
+    yield
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
-@app.get("/health")
+_configure_logging()
+app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
+app.add_exception_handler(ObjectStorageError, storage_unavailable)
+app.include_router(projects.router)
+app.include_router(ingestion.router)
+app.include_router(uploads.router)
+app.include_router(jobs.router)
+app.include_router(progress.router)
+
+@app.get(HEALTH_ROUTE)
 def health():
-    return {"status": "ok"}
-
-
-app.include_router(auth_router)
-
-
-@app.get(
-    "/api/user/profile",
-    dependencies=[Depends(verify_backend_auth)],
-)
-def get_profile(current_user: User = Depends(get_current_user)):
-    """
-    Returns the logged-in user's profile.
-
-    Requires BOTH headers:
-      - X-Backend-Auth: <BACKEND_AUTH_SECRET>
-      - Authorization: Bearer <session_token>
-    """
-    return {
-        "user_id": current_user.id,
-        "email": current_user.email,
-        "name": current_user.name,
-    }
+    return {"status": HEALTH_OK}
