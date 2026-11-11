@@ -79,5 +79,5 @@ def _record_cancellation(db: Session, job: Job, project: Project, asset: Optiona
         db,
         project.id,
         AuditAction.INGESTION_CANCELLED,
-        {AUDIT_DETAIL_JOB_ID: str(job.id), AUDIT_DETAIL_ERROR_CODE: job.error_code.value},
+        {AUDIT_DETAIL_JOB_ID: str(job.id)},
     )

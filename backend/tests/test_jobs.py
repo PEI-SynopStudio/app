@@ -24,6 +24,7 @@ from app.services.workflow.jobs import (
     create_ingestion_job,
     fail_job,
     queue_job,
+    cancel_job,
 )
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -172,3 +173,19 @@ def test_events_of_the_same_job_wait_for_each_other(db, session_factory):
     assert not thread.is_alive()
     db.expire_all()
     assert db.get(Job, job.id).status == JobStatusEnum.PROCESSING
+    
+    
+def test_cancelled_job_allows_new_ingestion(db):
+    project_id = make_project(db)
+    job = queue_job(db, new_job(db, project_id))
+    cancelled = cancel_job(db, project_id, str(job.id))
+    
+    assert cancelled.status == JobStatusEnum.CANCELLED
+    assert cancelled.finished_at is not None
+    assert new_job(db, project_id).status == JobStatusEnum.PENDING
+
+def test_finished_job_cannot_cancelled(db):
+    project_id = make_project(db)
+    job = fail_job(db, new_job(db, project_id), JobErrorCodeEnum.INTERNAL_ERROR, "Stopped")
+    with pytest.raises(InvalidStateTransitionError):
+        cancel_job(db, project_id, str(job.id))

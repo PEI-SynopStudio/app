@@ -18,7 +18,7 @@ from app.database.models import AudioTrack, AuditLog, Job, MediaAsset, Project
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
-from app.services.workflow.jobs import apply_job_event, create_ingestion_job, fail_job, queue_job
+from app.services.workflow.jobs import apply_job_event, create_ingestion_job, fail_job, queue_job, cancel_job
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 OUTPUT = {
@@ -203,3 +203,14 @@ def test_other_job_types_do_not_change_the_project(db):
 
     db.expire_all()
     assert db.get(Project, project.id).status == ProjectStatus.DRAFT
+    
+    
+def test_cancelled_job_marks_the_project_and_asset_and_audits(db):
+    job, project, asset = make_ingestion(db)
+    start(db, job)
+    cancel_job(db, str(project.id), str(job.id))
+    db.expire_all()
+    
+    assert db.get(MediaAsset, asset.id).status == MediaAssetStatus.FAILED
+    assert db.get(Project, project.id).status == ProjectStatus.INGESTION_FAILED
+    assert audit_details(db, project, AuditAction.INGESTION_CANCELLED) == {"job_id": str(job.id)}
