@@ -21,6 +21,10 @@ from app.core.config import (
     DEAD_LETTER_EXCHANGE,
     DEAD_LETTER_EXCHANGE_ARG,
     DEAD_LETTER_QUEUE,
+    DEAD_LETTER_MAX_LENGTH,
+    DEAD_LETTER_TTL_MS,
+    QUEUE_MAX_LENGTH_ARG,
+    QUEUE_MESSAGE_TTL_ARG,
     get_settings,
 )
 from app.core.exceptions import JobDispatchError
@@ -30,7 +34,7 @@ from app.services.workflow.dispatcher import JobDispatcher
 async def declare_dead_letter_queue(channel: AbstractChannel) -> Tuple[AbstractExchange, AbstractQueue]:
     """Keep rejected job requests and worker events for inspection instead of dropping them"""
     exchange = await channel.declare_exchange(DEAD_LETTER_EXCHANGE, aio_pika.ExchangeType.FANOUT, durable=True)
-    queue = await channel.declare_queue(DEAD_LETTER_QUEUE, durable=True)
+    queue = await channel.declare_queue(DEAD_LETTER_QUEUE, durable=True, arguments={QUEUE_MAX_LENGTH_ARG: DEAD_LETTER_MAX_LENGTH, QUEUE_MESSAGE_TTL_ARG: DEAD_LETTER_TTL_MS})
     await queue.bind(exchange)
     return exchange, queue
 

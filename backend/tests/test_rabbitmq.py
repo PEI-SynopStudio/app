@@ -143,3 +143,23 @@ def test_rejected_job_message_routed_dlq(queue_name):
     
     assert len(dead_letters) == 1
     assert JobRequestMessage.model_validate_json(dead_letters[0].body) == request
+    
+
+def test_dead_letter_queue_drops_oldest_messages_when_max_length_is_exceeded(queue_name, monkeypatch):
+    monkeypatch.setattr(rabbitmq_module, "DEAD_LETTER_MAX_LENGTH", 2)
+    dispatcher = RabbitMQDispatcher(TEST_RABBITMQ_URL)
+    requests = [job_request(), job_request(), job_request()]
+    for req in requests:
+        dispatcher.dispatch(req)
+
+    async def reject_all():
+        connection = await aio_pika.connect(TEST_RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            queue = await channel.declare_queue(queue_name, durable=True, passive=True)
+            while (message := await queue.get(no_ack=False, fail=False, timeout=2)) is not None:
+                await message.reject(requeue=False)
+
+    asyncio.run(reject_all())
+    dead_letters = [JobRequestMessage.model_validate_json(m.body) for m in read_messages(rabbitmq_module.DEAD_LETTER_QUEUE)]
+    assert dead_letters == requests[1:]

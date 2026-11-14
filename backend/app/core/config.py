@@ -165,6 +165,10 @@ JOB_EVENTS_ROUTING_KEY = "job.update"
 DEAD_LETTER_EXCHANGE = "jobs.dlx"
 DEAD_LETTER_QUEUE = "jobs.dlq"
 DEAD_LETTER_EXCHANGE_ARG = "x-dead-letter-exchange"
+QUEUE_MAX_LENGTH_ARG = "x-max-length"
+QUEUE_MESSAGE_TTL_ARG = "x-message-ttl"
+DEAD_LETTER_MAX_LENGTH = 1000
+DEAD_LETTER_TTL_MS = 7*24*3600*1000
 MEDIA_EVENTS_EXCHANGE = "media_events"
 MEDIA_INGESTED_QUEUE = "media.ingested"
 EVENT_CONSUMER_PREFETCH = 1
@@ -405,7 +409,7 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
-# Progress messages shown to the user for each step (FR02 outputs).
+# Progress messages shown to the user for each step of each pipeline (FR02 outputs).
 JOB_STEP_MESSAGES = {
     JobTypeEnum.INGESTION: {
         JobStepProcessingEnum.INITIALIZING: "Preparing the video",
