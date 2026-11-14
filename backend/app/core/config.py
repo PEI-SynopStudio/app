@@ -119,6 +119,7 @@ UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
 UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
 
 JOBS_ROUTE_TAG = "jobs"
+PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"

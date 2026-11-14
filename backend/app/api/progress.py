@@ -16,7 +16,7 @@ from app.core.config import (
 from app.database.session import get_session_factory
 from app.schemas.job import JobStatusResponseSchema
 from app.services.projects.projects import get_project
-from app.services.workflow.jobs import latest_ingestion_job
+from app.services.workflow.jobs import latest_project_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[INGESTION_ROUTE_TAG])
@@ -49,7 +49,7 @@ async def watch_progress(
 def _latest_state(session_factory: sessionmaker[Session], project_id: str) -> Optional[JobStatusResponseSchema]:
     """A short session: a connection can stay open for hours and must not hold a database connection."""
     with session_factory() as db:
-        job = latest_ingestion_job(db, get_project(db, project_id).id)
+        job = latest_project_job(db, get_project(db, project_id).id)
         return JobStatusResponseSchema.model_validate(job) if job is not None else None
 
 

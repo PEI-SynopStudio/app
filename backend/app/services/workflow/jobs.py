@@ -89,6 +89,22 @@ def get_job(db: Session, project_id: str, job_id: str) -> Job:
         raise JobNotFoundError()
     return job
 
+def latest_project_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id)
+        .order_by(Job.created_at.desc())
+    )
+    return db.scalars(query).first()
+
+
+def list_project_jobs(db: Session, project_id: uuid.UUID) -> List[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id)
+        .order_by(Job.created_at.desc())
+    )
+    return list(db.scalars(query).all())
 
 def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
     query = (
