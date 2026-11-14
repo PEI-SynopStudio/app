@@ -18,17 +18,27 @@ from app.core.config import (
     MEDIA_EVENTS_EXCHANGE,
     MEDIA_INGESTED_EVENT,
     MEDIA_INGESTED_QUEUE,
+    DEAD_LETTER_EXCHANGE,
+    DEAD_LETTER_EXCHANGE_ARG,
+    DEAD_LETTER_QUEUE,
     get_settings,
 )
 from app.core.exceptions import JobDispatchError
 from app.schemas.job import JobRequestMessage
 from app.services.workflow.dispatcher import JobDispatcher
 
+async def declare_dead_letter_queue(channel: AbstractChannel) -> Tuple[AbstractExchange, AbstractQueue]:
+    """Keep rejected job requests and worker events for inspection instead of dropping them"""
+    exchange = await channel.declare_exchange(DEAD_LETTER_EXCHANGE, aio_pika.ExchangeType.FANOUT, durable=True)
+    queue = await channel.declare_queue(DEAD_LETTER_QUEUE, durable=True)
+    await queue.bind(exchange)
+    return exchange, queue
+
 
 async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[AbstractExchange, AbstractQueue]:
     """Declared by both sides, so a job published before its worker starts waits in the queue."""
     exchange = await channel.declare_exchange(JOBS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
-    queue = await channel.declare_queue(JOBS_QUEUE_FORMAT.format(job_type=job_type), durable=True)
+    queue = await channel.declare_queue(JOBS_QUEUE_FORMAT.format(job_type=job_type), durable=True, arguments={DEAD_LETTER_EXCHANGE_ARG: DEAD_LETTER_EXCHANGE})
     await queue.bind(exchange, job_type)
     return exchange, queue
 
@@ -36,7 +46,7 @@ async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[Ab
 async def declare_event_queue(channel: AbstractChannel) -> Tuple[AbstractExchange, AbstractQueue]:
     """Worker to backend; the queue keeps the events while the backend is not reading them."""
     exchange = await channel.declare_exchange(JOB_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
-    queue = await channel.declare_queue(JOB_EVENTS_QUEUE, durable=True)
+    queue = await channel.declare_queue(JOB_EVENTS_QUEUE, durable=True, arguments={DEAD_LETTER_EXCHANGE_ARG: DEAD_LETTER_EXCHANGE})
     await queue.bind(exchange, JOB_EVENTS_ROUTING_KEY)
     return exchange, queue
 
@@ -82,3 +92,4 @@ class RabbitMQDispatcher(JobDispatcher):
 def get_dispatcher() -> JobDispatcher:
     """One dispatcher per process (FastAPI dependency)."""
     return RabbitMQDispatcher(get_settings().rabbitmq_url)
+

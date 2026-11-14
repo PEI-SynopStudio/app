@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.errors import SERVICE_ERRORS, http_error
-from app.core.config import JOB_ROUTE, JOBS_ROUTE_TAG, PROJECTS_ROUTE_PREFIX
+from app.core.config import JOB_ROUTE, JOBS_ROUTE_TAG, PROJECTS_ROUTE_PREFIX, JOB_CANCEL_ROUTE
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.workflow.jobs import get_job, cancel_job

@@ -109,7 +109,7 @@ def test_download_stalled_past_its_limit_is_failed(db):
     assert len(sweep_stalled_jobs(db)) == 1
 
     assert stored(db, job).error_code == JobErrorCodeEnum.TIMEOUT
-
+    
 
 def test_swept_job_no_longer_blocks_its_project(db):
     job = running_job(db, silent_for=TWO_HOURS)
