@@ -407,13 +407,24 @@ PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
 # Progress messages shown to the user for each step (FR02 outputs).
 JOB_STEP_MESSAGES = {
-    JobStepProcessingEnum.INITIALIZING: "Preparing the video",
-    JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
-    JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
-    JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
-    JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
-    JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
-    JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    JobTypeEnum.INGESTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the video",
+        JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
+        JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
+        JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
+        JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
+        JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    },
+    JobTypeEnum.TRANSCRIPTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the transcription",
+        JobStepProcessingEnum.TRANSCRIBING: "Transcribing the speech",
+        JobStepProcessingEnum.DIARIZING: "Identifying the speakers",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
+        JobStepProcessingEnum.FINISHED: "Transcription completed",
+    },
 }
 PROGRESS_DECIMALS = 2
 # Every progress event is a database write, so a step reports at most once per interval.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, computed_field, model_validator
@@ -143,4 +143,6 @@ class JobStatusResponseSchema(BaseModel):
     @property
     def message(self) -> str | None:
         """The progress text of the current step (FR02 outputs)."""
-        return JOB_STEP_MESSAGES.get(self.step)
+        if self.step is None:
+            return None
+        return JOB_STEP_MESSAGES.get(self.job_type, {}).get(self.step)
