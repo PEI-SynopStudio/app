@@ -39,6 +39,8 @@ def queues(monkeypatch):
         "JOBS_QUEUE_FORMAT": f"{prefix}-jobs.{{job_type}}",
         "JOB_EVENTS_EXCHANGE": f"{prefix}-events",
         "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
+        "DEAD_LETTER_EXCHANGE": f"{prefix}-dlx",
+        "DEAD_LETTER_QUEUE": f"{prefix}-dlq",
         "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
         "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
     }
@@ -51,9 +53,19 @@ def queues(monkeypatch):
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
             channel = await connection.channel()
-            for queue in (names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"), names["JOB_EVENTS_QUEUE"], names["MEDIA_INGESTED_QUEUE"]):
+            for queue in (
+                names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"), 
+                names["JOB_EVENTS_QUEUE"], 
+                names["MEDIA_INGESTED_QUEUE"],
+                names["DEAD_LETTER_QUEUE"],
+            ):
                 await channel.queue_delete(queue)
-            for exchange in (names["JOBS_EXCHANGE"], names["JOB_EVENTS_EXCHANGE"], names["MEDIA_EVENTS_EXCHANGE"]):
+            for exchange in (
+                names["JOBS_EXCHANGE"], 
+                names["JOB_EVENTS_EXCHANGE"], 
+                names["MEDIA_EVENTS_EXCHANGE"],
+                names["DEAD_LETTER_EXCHANGE"],
+            ):
                 await channel.exchange_delete(exchange)
 
     asyncio.run(remove())
@@ -199,13 +211,26 @@ def test_failed_job_announces_nothing(queues, session_factory, job):
 
 def test_invalid_and_unknown_events_do_not_stop_the_consumer(queues, session_factory, job, caplog):
     job_id = job.id
-    events = [b"not an event", progress_event(uuid.uuid4()).model_dump_json().encode(), progress_event(job_id).model_dump_json().encode()]
+    unknown = progress_event(uuid.uuid4()).model_dump_json().encode()
+    events = [b"not an event", unknown, progress_event(job_id).model_dump_json().encode()]
 
     with caplog.at_level(logging.WARNING):
         consume(session_factory, events, status_is(session_factory, job_id, JobStatusEnum.PROCESSING))
 
     assert "Invalid job event" in caplog.text
     assert "unknown job" in caplog.text
+    
+    async def read_dlq():
+        connection = await aio_pika.connect(TEST_RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            queue = await channel.declare_queue(queues["DEAD_LETTER_QUEUE"], durable=True, passive=True)
+            bodies = []
+            while (message := await queue.get(no_ack=True, fail=False, timeout=2)) is not None:
+                bodies.append(message.body)
+            return bodies
+            
+    assert asyncio.run(read_dlq()) == [b"not an event", unknown]
 
 
 def test_event_is_applied_after_a_database_failure(queues, session_factory, job, monkeypatch):

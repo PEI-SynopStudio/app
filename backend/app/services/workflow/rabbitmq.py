@@ -37,6 +37,7 @@ async def declare_dead_letter_queue(channel: AbstractChannel) -> Tuple[AbstractE
 
 async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[AbstractExchange, AbstractQueue]:
     """Declared by both sides, so a job published before its worker starts waits in the queue."""
+    await declare_dead_letter_queue(channel)
     exchange = await channel.declare_exchange(JOBS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
     queue = await channel.declare_queue(JOBS_QUEUE_FORMAT.format(job_type=job_type), durable=True, arguments={DEAD_LETTER_EXCHANGE_ARG: DEAD_LETTER_EXCHANGE})
     await queue.bind(exchange, job_type)
@@ -45,6 +46,7 @@ async def declare_job_queue(channel: AbstractChannel, job_type: str) -> Tuple[Ab
 
 async def declare_event_queue(channel: AbstractChannel) -> Tuple[AbstractExchange, AbstractQueue]:
     """Worker to backend; the queue keeps the events while the backend is not reading them."""
+    await declare_dead_letter_queue(channel)
     exchange = await channel.declare_exchange(JOB_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
     queue = await channel.declare_queue(JOB_EVENTS_QUEUE, durable=True, arguments={DEAD_LETTER_EXCHANGE_ARG: DEAD_LETTER_EXCHANGE})
     await queue.bind(exchange, JOB_EVENTS_ROUTING_KEY)
