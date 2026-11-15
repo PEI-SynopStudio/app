@@ -30,7 +30,11 @@ DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
 DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
-DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+DEFAULT_WHISPER_DEVICE = "cpu"
+DEFAULT_WHISPER_COMPUTE_TYPE = "int8"
+DEFAULT_SPEECH_CPU_THREADS = 4
+DEFAULT_SPEECH_MODELS_DIR = "/data/models"
 DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
@@ -307,6 +311,23 @@ ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
 ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
 ERROR_KEYFRAME_INDEX_FAILED = "Failed to build the keyframe index: {details}"
 
+# --- Speech processing: faster-whisper and wav2vec2 ---
+WHISPER_BEAM_SIZE = 5
+WHISPER_NO_SPEECH_THRESHOLD = 0.6
+WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4
+WHISPER_LOG_PROB_THRESHOLD = -1.0
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
+WHISPER_VAD_PARAMETERS = {
+    "threshold": 0.5,
+    "min_speech_duration_ms": 0,
+    "min_silence_duration_ms": 2000,
+    "speech_pad_ms": 400,
+}
+TRANSCRIPTION_WINDOW_SECONDS = 600
+ALIGNMENT_MODELS = {
+    "pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+}
+
 
 # --- Asynchronous jobs (T3.13) ---
 class JobTypeEnum(str, Enum):
@@ -570,6 +591,10 @@ class Settings:
     job_download_stalled_after_seconds: int
     log_level: str
     whisper_model: str
+    whisper_device: str
+    whisper_compute_type: str
+    speech_cpu_threads: int
+    speech_models_dir: Path
     default_language: str
     database_url: str
     database_echo: bool
@@ -602,6 +627,10 @@ def get_settings() -> Settings:
         ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        whisper_device=os.environ.get("WHISPER_DEVICE", DEFAULT_WHISPER_DEVICE),
+        whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", DEFAULT_WHISPER_COMPUTE_TYPE),
+        speech_cpu_threads=int(os.environ.get("SPEECH_CPU_THREADS", DEFAULT_SPEECH_CPU_THREADS)),
+        speech_models_dir=Path(os.environ.get("SPEECH_MODELS_DIR", DEFAULT_SPEECH_MODELS_DIR)),
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
