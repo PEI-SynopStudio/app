@@ -312,6 +312,7 @@ ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
 ERROR_KEYFRAME_INDEX_FAILED = "Failed to build the keyframe index: {details}"
 
 # --- Speech processing: faster-whisper and wav2vec2 ---
+# Library defaults made explicit, so every transcript records the exact parameters it was made with.
 WHISPER_BEAM_SIZE = 5
 WHISPER_NO_SPEECH_THRESHOLD = 0.6
 WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4
@@ -327,6 +328,11 @@ TRANSCRIPTION_WINDOW_SECONDS = 600
 ALIGNMENT_MODELS = {
     "pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
 }
+LANGUAGE_SUBTAG_SEPARATOR = "-"
+ALIGNMENT_MODEL_FILES = ("*.json", "*.safetensors", "pytorch_model.bin")
+ERROR_SPEECH_MODEL_UNAVAILABLE = "Speech model {model!r} could not be loaded: {details}"
+ERROR_NO_ALIGNMENT_MODEL = "No alignment model is configured for language {language!r}."
+LOG_SPEECH_MODEL_LOADED = "Speech model %s loaded (revision %s)"
 
 
 # --- Asynchronous jobs (T3.13) ---
