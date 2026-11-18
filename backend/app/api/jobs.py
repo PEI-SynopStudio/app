@@ -17,7 +17,7 @@ router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 def read_project_jobs(project_id: str, db: Session = Depends(get_db)):
     try:
         project = get_project(db, project_id)
-        return list_project_jobs(db, project_id)
+        return list_project_jobs(db, project.id)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
 

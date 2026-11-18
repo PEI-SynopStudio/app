@@ -115,4 +115,20 @@ def test_project_jobs_are_listed_newest_first(client, db):
 def test_listing_jobs_of_unknown_project_is_not_found(client):
     assert client.get(f"/projects/{uuid.uuid4()}/jobs").status_code == 404
     
+def test_listing_jobs_of_project_without_jobs_returns_empty_list(client, db):
+    project = create_project(db, ProjectCreate(
+        title="Empty",
+        author="University of Aveiro",
+        speakers=["Ana"],
+        recording_date=date(2026, 10, 1),
+        license_type=LicenseType.CREATIVE_COMMONS,
+        copyright_notice="CC BY 4.0",
+        licence_confirmed=True,
+        authorship_confirmed=True,
+    ))
+    response = client.get(f"/projects/{project.id}/jobs")
+    assert response.status_code == 200
+    assert response.json() == []
     
+def test_listing_jobs_with_invalid_project_id_is_rejected(client):
+    assert client.get("/projects/not-a-uuid/jobs").status_code == 422

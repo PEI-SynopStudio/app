@@ -157,7 +157,7 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
 # Fail the running jobs whose worker went silent, so they do not block their projects forever.
 # Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (periodic sweep, no retries).
 def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
-    """Only running jobs: a queued job is just waiting for a free worker. Returns the new state of the failed jobs."""
+    """Sweeps active jobs (pending, queued or processing) past their time limit. Returns the new state of the failed jobs."""
     failed = []
     for job_id in db.scalars(select(Job.id).where(Job.status.in_(JOB_ACTIVE_STATUSES))).all():
         # Locked and read again, so an event that arrives in the meantime is not overwritten.

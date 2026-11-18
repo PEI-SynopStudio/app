@@ -12,6 +12,7 @@ from app.core.config import (
     JobStatusEnum,
     JobStepProcessingEnum,
     LicenseType,
+    JobTypeEnum,
 )
 from app.core.exceptions import InvalidStateTransitionError, JobNotFoundError
 from app.database.models import AuditLog, Job
@@ -25,6 +26,8 @@ from app.services.workflow.jobs import (
     fail_job,
     queue_job,
     cancel_job,
+    latest_project_job,
+    list_project_jobs,
 )
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -189,3 +192,33 @@ def test_finished_job_cannot_cancelled(db):
     job = fail_job(db, new_job(db, project_id), JobErrorCodeEnum.INTERNAL_ERROR, "Stopped")
     with pytest.raises(InvalidStateTransitionError):
         cancel_job(db, project_id, str(job.id))
+        
+def test_latest_project_job_returns_newest_job_of_any_type(db):
+    project_uuid = uuid.UUID(make_project(db))
+    assert latest_project_job(db, project_uuid) is None
+
+    ingestion = fail_job(db, new_job(db, str(project_uuid)), JobErrorCodeEnum.INTERNAL_ERROR, "Stopped")
+    transcription = Job(
+        project_id=project_uuid,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.PROCESSING,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(transcription)
+    db.commit()
+
+    assert latest_project_job(db, project_uuid).id == transcription.id
+    assert latest_project_job(db, project_uuid).id != ingestion.id
+    
+def test_list_project_jobs_returns_only_project_jobs_newest_first(db):
+    project_id = make_project(db)
+    project_uuid = uuid.UUID(project_id)
+    other_project_id = make_project(db)
+
+    assert list_project_jobs(db, project_uuid) == []
+
+    first = fail_job(db, new_job(db, project_id), JobErrorCodeEnum.INTERNAL_ERROR, "Stopped")
+    second = new_job(db, project_id)
+    new_job(db, other_project_id)
+
+    assert [job.id for job in list_project_jobs(db, project_uuid)] == [second.id, first.id]

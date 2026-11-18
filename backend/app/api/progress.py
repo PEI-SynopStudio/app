@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.errors import SERVICE_ERRORS
 from app.core.config import (
     ASGI_WEBSOCKET_DISCONNECT,
-    INGESTION_ROUTE_TAG,
+    JOBS_ROUTE_TAG,
     PROGRESS_WS_ROUTE,
     PROJECTS_ROUTE_PREFIX,
     WS_CLOSE_PROJECT_NOT_FOUND,
@@ -19,7 +19,7 @@ from app.services.projects.projects import get_project
 from app.services.workflow.jobs import latest_project_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
-router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[INGESTION_ROUTE_TAG])
+router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 
 
 # Send the current state of the project's ingestion job, then every change while the client stays connected.
