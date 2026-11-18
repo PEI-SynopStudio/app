@@ -12,6 +12,7 @@ from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
 from app.services.workflow.jobs import fail_job
 from app.services.workflow.rabbitmq import get_dispatcher
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
@@ -47,14 +48,14 @@ def object_storage():
 
 
 @pytest.fixture
-def live(storage, object_storage, db_override, session_factory):
+def live(storage, object_storage, db_override, session_factory, user):
     """Client wired to the real dispatcher; yields (client, dispatcher, published events)."""
     events = []
     dispatcher = InProcessDispatcher(storage, object_storage, session_factory, publish_event=events.append)
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app), dispatcher, events
+    yield sign_in(TestClient(app), session_factory, user), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
     app.dependency_overrides.clear()
 

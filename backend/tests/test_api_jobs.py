@@ -12,17 +12,18 @@ from app.schemas.job import IngestionParams
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
+from conftest import sign_in
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
 
 @pytest.fixture
-def client(db_override):
-    yield TestClient(app)
+def client(db_override, session_factory, user):
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
-def queued_job(db):
+def queued_job(db, owner=None):
     project = create_project(db, ProjectCreate(
         title="Debate",
         author="University of Aveiro",
@@ -32,13 +33,13 @@ def queued_job(db):
         copyright_notice="CC BY 4.0",
         licence_confirmed=True,
         authorship_confirmed=True,
-    ))
+    ), owner)
     params = IngestionParams(source_url=SAMPLE_URL)
     return queue_job(db, create_ingestion_job(db, str(project.id), params, SAMPLE_URL))
 
 
-def test_job_can_be_read(client, db):
-    job = queued_job(db)
+def test_job_can_be_read(client, db, user):
+    job = queued_job(db, user)
 
     response = client.get(f"/projects/{job.project_id}/jobs/{job.id}")
 
@@ -46,16 +47,16 @@ def test_job_can_be_read(client, db):
     assert (response.json()["job_id"], response.json()["status"]) == (str(job.id), "queued")
 
 
-def test_unknown_job_is_not_found(client, db):
-    assert client.get(f"/projects/{queued_job(db).project_id}/jobs/{uuid.uuid4()}").status_code == 404
+def test_unknown_job_is_not_found(client, db, user):
+    assert client.get(f"/projects/{queued_job(db, user).project_id}/jobs/{uuid.uuid4()}").status_code == 404
 
 
-def test_job_of_another_project_is_not_found(client, db):
-    assert client.get(f"/projects/{uuid.uuid4()}/jobs/{queued_job(db).id}").status_code == 404
+def test_job_of_another_project_is_not_found(client, db, user):
+    assert client.get(f"/projects/{uuid.uuid4()}/jobs/{queued_job(db, user).id}").status_code == 404
 
 
-def test_invalid_job_id_is_rejected(client, db):
-    assert client.get(f"/projects/{queued_job(db).project_id}/jobs/not-a-uuid").status_code == 422
+def test_invalid_job_id_is_rejected(client, db, user):
+    assert client.get(f"/projects/{queued_job(db, user).project_id}/jobs/not-a-uuid").status_code == 422
 
 
 def test_restarting_the_api_leaves_the_jobs_alone(session_factory, db, monkeypatch):

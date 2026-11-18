@@ -35,6 +35,13 @@ DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
 ENV_TRUE_VALUE = "true"
+# A session in use renews itself after half of this, so it never expires while the user waits (WCAG 2.2.1).
+DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600
+# Local development runs over plain HTTP; behind TLS, set SESSION_COOKIE_SECURE=true.
+DEFAULT_SESSION_COOKIE_SECURE = "false"
+# Brute-force detection (MS3 §1.1.6): consecutive wrong passwords before the account is locked, and for how long.
+DEFAULT_LOGIN_MAX_FAILED_ATTEMPTS = 5
+DEFAULT_LOGIN_LOCKOUT_SECONDS = 15 * 60
 
 
 # --- Storage layout ---
@@ -77,6 +84,11 @@ ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while an ingestion 
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
+ERROR_NOT_AUTHENTICATED = "Sign in to continue."
+# One message for an unknown email, a wrong password, a locked or a disabled account: it never reveals which.
+ERROR_INVALID_CREDENTIALS = "The email or password is incorrect."
+ERROR_EMAIL_TAKEN = "An account with this email already exists."
+ERROR_WRONG_PASSWORD = "The current password is incorrect."
 
 # --- Project documents ---
 JSON_DUMP_MODE = "json"
@@ -112,6 +124,20 @@ JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
+WS_CLOSE_NOT_AUTHENTICATED = 4401
+AUTH_ROUTE_PREFIX = "/auth"
+AUTH_ROUTE_TAG = "auth"
+REGISTER_ROUTE = "/register"
+LOGIN_ROUTE = "/login"
+LOGOUT_ROUTE = "/logout"
+LOGOUT_ALL_ROUTE = "/logout-all"
+ME_ROUTE = "/me"
+PASSWORD_ROUTE = "/me/password"
+USER_AGENT_HEADER = "user-agent"
+SESSION_COOKIE_NAME = "synopstudio_session"
+SESSION_COOKIE_PATH = "/"
+# Lax: the cookie is not sent with requests that other sites start (forms, scripts, images).
+SESSION_COOKIE_SAMESITE = "lax"
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
 PROGRESS_QUEUE_SIZE = 1
 FILE_NAME_MIN_LENGTH = 1
@@ -502,6 +528,34 @@ JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
+# --- Accounts and sessions (MS3 §1.1.2, §1.1.6, §1.4.1) ---
+TABLE_USERS = "users"
+TABLE_AUTH_SESSIONS = "auth_sessions"
+FK_USER_ID = f"{TABLE_USERS}.id"
+# The longest address SMTP accepts (RFC 5321).
+EMAIL_MAX_LENGTH = 254
+USER_NAME_MIN_LENGTH = 1
+USER_NAME_MAX_LENGTH = 120
+PASSWORD_MIN_LENGTH = 8
+# Argon2 accepts any length; the cap keeps one request from costing seconds of CPU.
+PASSWORD_MAX_LENGTH = 128
+PASSWORD_HASH_MAX_LENGTH = 255
+SESSION_TOKEN_BYTES = 32
+# SHA-256 as hex.
+TOKEN_HASH_LENGTH = 64
+# Share of the lifetime after which a session in use gets a new full lifetime.
+SESSION_RENEW_FRACTION = 0.5
+# IPv6 in text form.
+IP_ADDRESS_MAX_LENGTH = 45
+USER_AGENT_MAX_LENGTH = 512
+
+
+class AgeGroup(str, Enum):
+    """Age declared at registration; under 13 has no value, so it cannot register (MS3 §1.4.1)."""
+
+    ADULT = "adult"
+    MINOR_WITH_GUARDIAN_CONSENT = "minor_with_guardian_consent"
+
 
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"
@@ -573,6 +627,10 @@ class Settings:
     default_language: str
     database_url: str
     database_echo: bool
+    session_ttl_seconds: int
+    session_cookie_secure: bool
+    login_max_failed_attempts: int
+    login_lockout_seconds: int
 
 
 @lru_cache
@@ -605,4 +663,12 @@ def get_settings() -> Settings:
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
+        session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS)),
+        session_cookie_secure=(
+            os.environ.get("SESSION_COOKIE_SECURE", DEFAULT_SESSION_COOKIE_SECURE).lower() == ENV_TRUE_VALUE
+        ),
+        login_max_failed_attempts=int(
+            os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", DEFAULT_LOGIN_MAX_FAILED_ATTEMPTS)
+        ),
+        login_lockout_seconds=int(os.environ.get("LOGIN_LOCKOUT_SECONDS", DEFAULT_LOGIN_LOCKOUT_SECONDS)),
     )

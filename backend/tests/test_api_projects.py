@@ -9,6 +9,7 @@ from app.database.models import AuditLog, Job, MediaAsset
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import ObjectStorageError, get_object_storage
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 
 PROJECT_BODY = {
@@ -34,10 +35,10 @@ def object_storage():
 
 
 @pytest.fixture
-def client(db_override, storage, object_storage):
+def client(db_override, storage, object_storage, session_factory, user):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = lambda: object_storage
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     CONTENT_TYPE_MAX_LENGTH,
@@ -72,7 +73,12 @@ def _progress(object_storage: ObjectStorage, session: UploadSession) -> UploadPr
 
 # Open a chunked upload after checking the licence and the declared extension, MIME type and size.
 # Source: MS2 FR02 – Step 1 (direct upload, chunked multipart upload for multi-GB files).
-@router.post(UPLOADS_ROUTE, status_code=status.HTTP_201_CREATED, response_model=UploadProgress)
+@router.post(
+    UPLOADS_ROUTE,
+    status_code=status.HTTP_201_CREATED,
+    response_model=UploadProgress,
+    dependencies=[Depends(require_project_access)],
+)
 def create_upload(
     project_id: str,
     body: UploadStart,
@@ -86,7 +92,7 @@ def create_upload(
     return _progress(object_storage, session)
 
 
-@router.get(UPLOAD_ROUTE, response_model=UploadProgress)
+@router.get(UPLOAD_ROUTE, response_model=UploadProgress, dependencies=[Depends(require_project_access)])
 def read_upload(
     project_id: str,
     upload_id: str,
@@ -101,7 +107,9 @@ def read_upload(
 
 # Receive one chunk as multipart form data (field "chunk"); sending the same chunk again replaces it.
 # Source: MS2 FR02 – Step 1 (chunked multipart upload).
-@router.put(UPLOAD_CHUNK_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
+@router.put(
+    UPLOAD_CHUNK_ROUTE, status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_project_access)]
+)
 def upload_chunk(
     project_id: str,
     upload_id: str,
@@ -121,7 +129,12 @@ def upload_chunk(
 
 # Check that every chunk arrived and queue the job, which joins them and applies the optional time range.
 # Source: MS2 FR02 – Inputs (optional start/end timecodes), Step 2 and Outputs (asynchronous ingestion, no UI blocking).
-@router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
+@router.post(
+    UPLOAD_COMPLETE_ROUTE,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobStatusResponseSchema,
+    dependencies=[Depends(require_project_access)],
+)
 def complete_upload(
     project_id: str,
     upload_id: str,

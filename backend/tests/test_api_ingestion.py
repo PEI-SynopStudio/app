@@ -14,6 +14,7 @@ from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.rabbitmq import get_dispatcher
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
@@ -51,16 +52,16 @@ def dispatcher():
 
 
 @pytest.fixture
-def client(storage, dispatcher, db_override):
+def client(storage, dispatcher, db_override, session_factory, user):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def live(storage, db_override, session_factory):
+def live(storage, db_override, session_factory, user):
     """Client wired to the in-process stand-in; yields (client, dispatcher, published events)."""
     events = []
     object_storage = InMemoryObjectStorage()
@@ -68,7 +69,7 @@ def live(storage, db_override, session_factory):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app), dispatcher, events
+    yield sign_in(TestClient(app), session_factory, user), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
     app.dependency_overrides.clear()
 

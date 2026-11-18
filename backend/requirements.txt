@@ -9,3 +9,5 @@ yt-dlp>=2024.10.07
 av>=19.0
 aio-pika>=10.2
 boto3>=1.43
+argon2-cffi>=25.1
+email-validator>=2.2
