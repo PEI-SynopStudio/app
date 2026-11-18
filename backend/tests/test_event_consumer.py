@@ -9,7 +9,15 @@ import aio_pika
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, LicenseType, MediaAssetStatus, SourceType
+from app.core.config import (
+    JobErrorCodeEnum, 
+    JobStatusEnum, 
+    JobStepProcessingEnum, 
+    JobTypeEnum,
+    LicenseType, 
+    MediaAssetStatus, 
+    SourceType,
+)
 from app.database.models import Job, MediaAsset
 from app.schemas.job import IngestionParams, JobRequestMessage, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
@@ -17,7 +25,7 @@ from app.services.projects.projects import create_project
 from app.services.storage.local import LocalStorage
 from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
 from app.services.workflow.event_consumer import JobEventConsumer
-from app.services.workflow.jobs import create_ingestion_job, queue_job
+from app.services.workflow.jobs import create_ingestion_job, queue_job, cancel_job
 from app.services.workflow.progress_hub import JobProgressHub
 from in_memory_object_storage import InMemoryObjectStorage
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
@@ -266,3 +274,102 @@ def test_consumer_keeps_trying_while_the_broker_is_down(monkeypatch, caplog):
         asyncio.run(run())
 
     assert "cannot reach the broker" in caplog.text
+
+def test_transcription_job_lifecycle_e2e(queues, session_factory, db):
+    project = create_project(db, ProjectCreate(
+        title="Debate",
+        author="University of Aveiro",
+        speakers=["Ana"],
+        recording_date=date(2026, 10, 1),
+        license_type=LicenseType.CREATIVE_COMMONS,
+        copyright_notice="CC BY 4.0",
+        licence_confirmed=True,
+        authorship_confirmed=True,
+    ))
+    transcription = Job(
+        project_id=project.id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.QUEUED,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(transcription)
+    db.commit()
+    job_id = transcription.id
+
+    events = [
+        JobUpdateEventSchema(
+            job_id=job_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.INITIALIZING, step_progress=100
+        ),
+        JobUpdateEventSchema(
+            job_id=job_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.TRANSCRIBING, step_progress=50
+        ),
+        JobUpdateEventSchema(
+            job_id=job_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.DIARIZING, step_progress=100
+        ),
+        JobUpdateEventSchema(
+            job_id=job_id, status=JobStatusEnum.COMPLETED, step_progress=100, output={"segments_count": 42}
+        ),
+    ]
+    hub = JobProgressHub()
+    with hub.watch(project.id) as updates:
+        consume(
+            session_factory,
+            [event.model_dump_json().encode() for event in events],
+            status_is(session_factory, job_id, JobStatusEnum.COMPLETED),
+            hub,
+        )
+        latest_ws_update = updates.get_nowait()
+
+    with session_factory() as check_db:
+        stored = check_db.get(Job, job_id)
+        assert stored.status == JobStatusEnum.COMPLETED
+        assert stored.step == JobStepProcessingEnum.FINISHED
+        assert stored.progress == 100.0
+        assert stored.output == {"segments_count": 42}
+        assert stored.started_at is not None
+        assert stored.finished_at is not None
+
+    assert latest_ws_update.status == JobStatusEnum.COMPLETED
+    assert latest_ws_update.message == "Transcription completed"
+    assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []
+    
+def test_late_worker_events_after_cancellation_are_ignored_e2e(queues, session_factory, db, job):
+    job_id, project_id = job.id, job.project_id
+    cancel_job(db, str(project_id), str(job_id))
+
+    late_progress = progress_event(job_id, percent=80.0).model_dump_json().encode()
+    late_completed = JobUpdateEventSchema(
+        job_id=job_id, status=JobStatusEnum.COMPLETED, step_progress=100, output={"ignored": True}
+    ).model_dump_json().encode()
+
+    # Follow with a second job's event so consume() knows the consumer processed everything before it.
+    other_job = Job(
+        project_id=project_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.QUEUED,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(other_job)
+    db.commit()
+    other_id = other_job.id
+    marker_event = JobUpdateEventSchema(
+        job_id=other_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.TRANSCRIBING, step_progress=10
+    ).model_dump_json().encode()
+
+    hub = JobProgressHub()
+    with hub.watch(project_id) as updates:
+        consume(
+            session_factory,
+            [late_progress, late_completed, marker_event],
+            status_is(session_factory, other_id, JobStatusEnum.PROCESSING),
+            hub,
+        )
+        ws_update = updates.get_nowait()
+
+    with session_factory() as check_db:
+        cancelled_job = check_db.get(Job, job_id)
+        assert cancelled_job.status == JobStatusEnum.CANCELLED
+        assert cancelled_job.output is None
+
+    assert ws_update.job_id == other_id
+    assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []
