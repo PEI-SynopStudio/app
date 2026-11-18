@@ -333,6 +333,11 @@ ALIGNMENT_MODEL_FILES = ("*.json", "*.safetensors", "pytorch_model.bin")
 ERROR_SPEECH_MODEL_UNAVAILABLE = "Speech model {model!r} could not be loaded: {details}"
 ERROR_NO_ALIGNMENT_MODEL = "No alignment model is configured for language {language!r}."
 LOG_SPEECH_MODEL_LOADED = "Speech model %s loaded (revision %s)"
+CONFIDENCE_MIN = 0.0
+CONFIDENCE_MAX = 1.0
+TRANSCRIPT_COUNT_MIN = 0
+SEGMENT_MIN_WORDS = 1
+ERROR_TRANSCRIPT_TIME_ORDER = "Invalid interval: end ({end:.3f} s) is before start ({start:.3f} s)."
 
 
 # --- Asynchronous jobs (T3.13) ---
