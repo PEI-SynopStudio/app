@@ -15,10 +15,12 @@ from app.core.config import (
     ERROR_INVALID_JOB_ID,
     ERROR_JOB_QUEUED_STALLED,
     ERROR_JOB_STALLED,
+    ERROR_JOB_DISPATCH_FAILED,
     JOB_ACTIVE_INGESTION_INDEX,
     JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
+    LOG_JOB_DISPATCH_FAILED,
     ApplyOutcome,
     AuditAction,
     JobErrorCodeEnum,
@@ -30,9 +32,10 @@ from app.core.config import (
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
 from app.database.models import Job
-from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema
+from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema, JobRequestMessage
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
+from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.ingestion_results import record_ingestion_outcome
 from app.services.workflow.state_machine import ApplyResult, JobSnapshot, apply_event, change_status
 
@@ -119,6 +122,15 @@ def queue_job(db: Session, job: Job) -> Job:
     """Committed before publishing, so a worker event never arrives while the job is still pending."""
     return _change_status(db, job, JobStatusEnum.QUEUED)
 
+def dispatch_job(db: Session, dispatcher: JobDispatcher, job: Job, request: JobRequestMessage) -> Job:
+    queue_job(db, job)
+    try:
+        dispatcher.dispatch(request)
+    except Exception:
+        logger.exception(LOG_JOB_DISPATCH_FAILED, job.id)
+        fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_DISPATCH_FAILED)
+        raise
+    return job
 
 def fail_job(db: Session, job: Job, error_code: JobErrorCodeEnum, error_message: str) -> Job:
     return _change_status(db, job, JobStatusEnum.FAILED, error_code, error_message)
