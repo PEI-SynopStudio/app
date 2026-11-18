@@ -539,10 +539,22 @@ TABLE_UPLOAD_SESSIONS = "upload_sessions"
 TABLE_JOBS = "jobs"
 TABLE_AUDIT_LOG = "audit_log"
 DB_ON_DELETE_SET_NULL = "SET NULL"
+TABLE_TRANSCRIPTS = "transcripts"
+TABLE_TRANSCRIPT_SEGMENTS = "transcript_segments"
+TABLE_TRANSCRIPT_WORDS = "transcript_words"
+FK_JOB_ID = f"{TABLE_JOBS}.id"
+FK_TRANSCRIPT_ID = f"{TABLE_TRANSCRIPTS}.id"
+FK_TRANSCRIPT_SEGMENT_ID = f"{TABLE_TRANSCRIPT_SEGMENTS}.id"
+TRANSCRIPT_SEGMENTS_TIME_INDEX = "ix_transcript_segments_transcript_id_start_seconds"
+TRANSCRIPT_WORDS_TIME_INDEX = "ix_transcript_words_transcript_id_start_seconds"
+LANGUAGE_CODE_MAX_LENGTH = 16
+MODEL_NAME_MAX_LENGTH = 255
+MODEL_REVISION_MAX_LENGTH = 64
 # A new ingestion replaces the assets in these statuses; uploads still in progress are kept.
 REPLACEABLE_ASSET_STATUSES = (MediaAssetStatus.READY, MediaAssetStatus.FAILED)
 JOB_ACTIVE_STATUSES = (JobStatusEnum.PENDING, JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING)
 JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
+JOB_ACTIVE_TRANSCRIPTION_INDEX = "uq_jobs_one_active_transcription_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
