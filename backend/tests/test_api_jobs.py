@@ -100,3 +100,19 @@ def test_cancelling_unknown_job_notfounderror(client, db):
 def test_cancelling_with_invalid_jobid_rejectederror(client, db):
     job = queued_job(db)
     assert client.post(f"/projects/{job.project_id}/jobs/not-a-uuid/cancel").status_code == 422
+
+def test_project_jobs_are_listed_newest_first(client, db):
+    first = queued_job(db)
+    client.post(f"/projects/{first.project_id}/jobs/{first.id}/cancel")
+    second = queue_job(
+        db, create_ingestion_job(db, str(first.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
+    )
+
+    response = client.get(f"/projects/{first.project_id}/jobs")
+    assert response.status_code == 200
+    assert [job["job_id"] for job in response.json()] == [str(second.id), str(first.id)]
+    
+def test_listing_jobs_of_unknown_project_is_not_found(client):
+    assert client.get(f"/projects/{uuid.uuid4()}/jobs").status_code == 404
+    
+    
