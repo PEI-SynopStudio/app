@@ -66,7 +66,7 @@ export function Stage({ doc, assets, time, duration, isPlaying, selectedId, onSe
             </p>
           )}
           {doc.captions && layers.length > 0 && (
-            <Caption text={CAPTION_SAMPLE[doc.captions.language]} variant={doc.captions.style} />
+           <Caption text={CAPTION_SAMPLE[doc.language]} variant={doc.captions.style} />
           )}
         </div>
 

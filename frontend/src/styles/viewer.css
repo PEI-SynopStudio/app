@@ -30,7 +30,7 @@
 .viewer__layout {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   gap: clamp(32px, 5vw, 64px);
 }
 
@@ -104,6 +104,19 @@
 
 .viewer__missing p {
   color: var(--muted);
+}
+
+/* The transcript takes the whole column */
+.viewer__info .transcript {
+  justify-self: stretch;
+}
+
+/* On wide screens the clip stays in view while the transcript scrolls by */
+@media (min-width: 900px) {
+  .viewer__player {
+    position: sticky;
+    top: 24px;
+  }
 }
 
 @media (max-width: 899px) {

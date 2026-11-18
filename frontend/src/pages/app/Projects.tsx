@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { IconPlus, IconSearch } from "../../components/Icons";
 import { StatusBadge } from "../../components/StatusBadge";
 import { Waveform } from "../../components/Waveform";
-import { projects, type Project, type ProjectStatus } from "../../data/mock";
+import { projects, sceneRanges, type Project, type ProjectStatus } from "../../data/mock";
 import { usePageEnter } from "../../hooks/useMotion";
 import { DURATION, EASE, Flip, gsap, prefersReducedMotion, useGSAP } from "../../lib/gsap";
 import { formatDate, formatTime, plural, seedFrom, toRanges } from "../../lib/utils";
@@ -141,7 +141,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="project-card__thumb surface-dark">
         <Waveform
           bars={THUMB_BARS}
-          ranges={toRanges(project.clips, project.durationSec, THUMB_BARS)}
+          ranges={toRanges(sceneRanges(project.clips), project.durationSec, THUMB_BARS)}
           seed={seedFrom(project.id)}
         />
         <span className="project-card__duration">{formatTime(project.durationSec)}</span>

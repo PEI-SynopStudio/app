@@ -6,6 +6,8 @@ import { SupportingFilesField } from "../../components/SupportingFilesField";
 import { VideoSourceField, type VideoSource } from "../../components/VideoSourceField";
 import { usePageEnter } from "../../hooks/useMotion";
 import { shake, useGSAP } from "../../lib/gsap";
+import { clearCustomValidity, validateForm } from "../../lib/validation";
+
 
 const MAX_FOCUS = 1000;
 
@@ -37,9 +39,8 @@ export function Summarize() {
       shake(sourceRef.current);
       return;
     }
-    if (!form.checkValidity()) {
+    if (!validateForm(form)) {
       shake(form);
-      form.reportValidity();
       return;
     }
     // TODO(api): POST /summaries — video (upload or YouTube URL), `materials` and the options from FormData.
@@ -58,7 +59,7 @@ export function Summarize() {
         </div>
       </header>
 
-      <form ref={formRef} className="form" noValidate onSubmit={handleSubmit}>
+      <form ref={formRef} className="form" noValidate onSubmit={handleSubmit} onInput={clearCustomValidity}>
         <FormSection id="video" title="Video" description="Upload a long recording or paste a YouTube link.">
           <VideoSourceField ref={sourceRef} onChange={setSource} error={sourceError} onError={setSourceError} />
         </FormSection>

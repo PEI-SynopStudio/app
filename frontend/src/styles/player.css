@@ -93,6 +93,30 @@
   transform-origin: 0 50%;
 }
 
+
+/* ---------- Card: fills a clip card on the project page ---------- */
+.clip-player--card {
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+.clip-player--card .clip-player__frame {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.clip-player--card .clip-player__play {
+  width: 44px;
+  height: 44px;
+}
+
+.clip-player--card .clip-player__play svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* ---------- Captions (sized by the frame they sit in) ---------- */
 .caption {
   position: absolute;

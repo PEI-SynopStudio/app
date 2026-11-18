@@ -1,3 +1,4 @@
+import { seedFrom } from "./utils";
 const VIDEO_ID = /^[\w-]{11}$/;
 const HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"]);
 const ID_PATHS = new Set(["shorts", "embed", "live"]);
@@ -37,4 +38,19 @@ export function youTubeWatchUrl(videoId: string): string {
 
 export function youTubeThumbnail(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+}
+
+
+/** The three stills YouTube keeps for every video (around ¼, ½ and ¾ of the way in). */
+export function youTubeFrames(videoId: string): string[] {
+  return [1, 2, 3].map((index) => `https://i.ytimg.com/vi/${videoId}/mq${index}.jpg`);
+}
+
+/**
+ * The browser can't read a YouTube video's length without YouTube's own API.
+ * TODO(api): GET /videos/youtube/:id → { duration }. Until then, a stable demo length (10–16 min).
+ */
+export function fetchYouTubeDuration(videoId: string): Promise<number> {
+  const seconds = 600 + Math.round(seedFrom(videoId) * 36);
+  return new Promise((resolve) => window.setTimeout(() => resolve(seconds), 400));
 }

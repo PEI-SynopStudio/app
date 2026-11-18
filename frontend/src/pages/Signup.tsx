@@ -5,6 +5,7 @@ import { PRIVACY } from "../data/privacy";
 import { TERMS } from "../data/terms";
 import { AuthLayout } from "../layouts/AuthLayout";
 import { shake, useGSAP } from "../lib/gsap";
+import { clearCustomValidity, validateForm } from "../lib/validation";
 
 export function Signup() {
   const navigate = useNavigate();
@@ -14,9 +15,8 @@ export function Signup() {
   const handleSubmit = contextSafe((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    if (!form.checkValidity()) {
+    if (!validateForm(form)) {
       shake(form);
-      form.reportValidity();
       return;
     }
     // TODO(auth): connect to the API once the sign-up spec exists (send termsVersion and privacyVersion).
@@ -33,7 +33,7 @@ export function Signup() {
         </>
       }
     >
-      <form ref={formRef} className="auth__form" noValidate onSubmit={handleSubmit}>
+      <form ref={formRef} className="auth__form" noValidate onSubmit={handleSubmit} onInput={clearCustomValidity}>
         <Field label="Name" name="name" autoComplete="name" required />
         <Field
           label="Email"

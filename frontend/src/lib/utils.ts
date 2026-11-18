@@ -4,6 +4,11 @@ export interface WaveRange {
   to: number; // índice da última barra (inclusive)
 }
 
+export interface TimeRange {
+  start: number; // seconds
+  end: number; // seconds
+}
+
 /** 75 → "1:15" · 4368 → "1:12:48" */
 export function formatTime(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds));
@@ -20,6 +25,22 @@ export function formatTime(totalSeconds: number): string {
 export function formatTimecode(totalSeconds: number): string {
   const tenths = Math.round(Math.max(0, totalSeconds) * 10);
   return `${formatTime(Math.floor(tenths / 10))}.${tenths % 10}`;
+}
+
+/** 41 → "00:41" · 3723 → "01:02:03" — transcript stamps and the range picker. */
+export function formatClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const hours = Math.floor(s / 3600);
+  const clock = `${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+  return hours > 0 ? `${pad(hours)}:${clock}` : clock;
+}
+
+/** "1:02:03" · "02:03" · "75" → seconds. Null when the text isn't a time. */
+export function parseClock(text: string): number | null {
+  const parts = text.trim().split(":");
+  if (parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) return null;
+  return parts.reduce((total, part) => total * 60 + Number(part), 0);
 }
 
 const dateFormat = new Intl.DateTimeFormat("en-GB", {

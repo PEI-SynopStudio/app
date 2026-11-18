@@ -12,14 +12,18 @@ interface ClipPlayerProps {
   isPlaying: boolean;
   onToggle: () => void;
   caption?: { text: string; variant: CaptionStyle } | null;
+  variant?: "stage" | "card"; // card = fills a clip card, without the dark stage around it
 }
 
 /** The clip in its final format. Placeholder visuals until there is a real video. */
-export function ClipPlayer({ format, elapsed, length, isPlaying, onToggle, caption }: ClipPlayerProps) {
+export function ClipPlayer({ format, elapsed, length, isPlaying, onToggle, caption, variant = "stage" }: ClipPlayerProps) {
   const progress = length > 0 ? elapsed / length : 0;
+  const className = ["clip-player", variant === "card" && "clip-player--card", isPlaying && "is-playing"]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className={isPlaying ? "clip-player is-playing" : "clip-player"}>
+    <div className={className}>
       <div className="clip-player__frame" style={{ "--ratio": FORMAT_RATIO[format] } as CSSProperties}>
         <button
           type="button"

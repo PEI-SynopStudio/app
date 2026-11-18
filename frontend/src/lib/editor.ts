@@ -1,8 +1,8 @@
 // Clip editor model: the timeline document and the pure maths behind it.
 // No React in here, so the API can store and replay the same shape later.
 
-import type { Clip, Project } from "../data/mock";
-import type { AspectRatio, CaptionSettings } from "../data/options";
+import { placeScenes, type Clip, type Project } from "../data/mock";
+import type { AspectRatio, CaptionSettings, Language } from "../data/options";
 
 export type TrackKind = "video" | "overlay" | "text" | "audio";
 
@@ -67,6 +67,7 @@ export interface TimelineItem {
 export interface EditorDoc {
   format: AspectRatio;
   captions: CaptionSettings | null;
+  language: Language;
   tracks: Track[];
   items: TimelineItem[];
 }
@@ -378,38 +379,43 @@ export function projectAssets(project: Project): MediaAsset[] {
     source: "project",
     offset: 0,
   };
-  const clips = project.clips.map(
-    (clip): MediaAsset => ({
-      id: `clip-${clip.id}`,
-      kind: "video",
-      name: clip.title,
-      duration: clip.end - clip.start,
-      source: "project",
-      offset: clip.start,
-    }),
+  // Every scene the AI picked, so it can be dropped back into any edit.
+  const scenes = project.clips.flatMap((clip) =>
+    clip.scenes.map(
+      (scene, index): MediaAsset => ({
+        id: `scene-${clip.id}-${index + 1}`,
+        kind: "video",
+        name: clip.scenes.length > 1 ? `${clip.title} · Scene ${index + 1}` : clip.title,
+        duration: scene.end - scene.start,
+        source: "project",
+        offset: scene.start,
+      }),
+    ),
   );
-  return [recording, ...clips];
+  return [recording, ...scenes];
 }
 
 /** A new edit starts from the AI cut: the clip's range of the recording on the video track. */
+/** A new edit starts from the AI cut: each scene of the clip on the video track, back to back. */
 export function createDoc(project: Project, clip: Clip): EditorDoc {
   return {
     format: project.format,
     captions: project.captions,
+    language: clip.subtitleLanguage ?? project.language,
     tracks: DEFAULT_TRACKS,
-    items: [
-      {
-        id: "item-main",
+    items: placeScenes(clip).map(
+      (scene, index): TimelineItem => ({
+        id: `item-scene-${index + 1}`,
         trackId: "track-video",
         kind: "media",
         assetId: SOURCE_ID,
-        start: 0,
-        duration: clip.end - clip.start,
-        inPoint: clip.start,
+        start: scene.at,
+        duration: scene.end - scene.start,
+        inPoint: scene.start,
         volume: 1,
         opacity: 1,
         fit: "cover",
-      },
-    ],
+      }),
+    ),
   };
 }

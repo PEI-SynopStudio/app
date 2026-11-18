@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router";
 import { AppLayout } from "./layouts/AppLayout";
 import { RootLayout } from "./layouts/RootLayout";
 import { ClipEditor } from "./pages/app/ClipEditor";
+import { ClipDetail } from "./pages/app/ClipDetail";
 import { NewProject } from "./pages/app/NewProject";
 import { ProjectDetail } from "./pages/app/ProjectDetail";
 import { Projects } from "./pages/app/Projects";
@@ -34,10 +35,11 @@ export const router = createBrowserRouter([
           { path: "new", element: <NewProject /> },
           { path: "summarize", element: <Summarize /> },
           { path: "projects/:projectId", element: <ProjectDetail /> },
+          { path: "projects/:projectId/clips/:clipId", element: <ClipDetail /> },
           { path: "settings", element: <Settings /> },
         ],
       },
-      { path: "app/projects/:projectId/clips/:clipId", element: <ClipEditor /> },
+      { path: "app/projects/:projectId/clips/:clipId/edit", element: <ClipEditor /> },
       { path: "*", element: <NotFound /> },
     ],
   },

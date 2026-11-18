@@ -6,10 +6,13 @@ import { FormatPicker } from "../../components/FormatPicker";
 import { FormSection } from "../../components/FormSection";
 import { IconArrowLeft } from "../../components/Icons";
 import { SupportingFilesField } from "../../components/SupportingFilesField";
+import { VideoRangeField } from "../../components/VideoRangeField";
 import { VideoSourceField, type VideoSource } from "../../components/VideoSourceField";
-import { DEFAULT_CAPTIONS, type AspectRatio, type CaptionSettings } from "../../data/options";
+import { DEFAULT_CAPTIONS, type AspectRatio, type CaptionSettings, type Language } from "../../data/options";
 import { usePageEnter } from "../../hooks/useMotion";
 import { shake, useGSAP } from "../../lib/gsap";
+import type { TimeRange } from "../../lib/utils";
+import { clearCustomValidity, validateForm } from "../../lib/validation";
 
 const MAX_DESCRIPTION = 2000;
 
@@ -20,6 +23,8 @@ export function NewProject() {
   const sourceRef = useRef<HTMLDivElement>(null);
   const [source, setSource] = useState<VideoSource | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
+  const [range, setRange] = useState<TimeRange | null>(null); // null = the whole video
+  const [language, setLanguage] = useState<Language | null>(null);
   const [materials, setMaterials] = useState<File[]>([]);
   const [description, setDescription] = useState("");
   const [format, setFormat] = useState<AspectRatio>("9:16");
@@ -29,6 +34,11 @@ export function NewProject() {
 
   const { contextSafe } = useGSAP({ scope: formRef });
 
+  function changeSource(next: VideoSource | null) {
+    setSource(next);
+    setRange(null); // a new video starts with all of it selected
+  }
+
   const handleSubmit = contextSafe((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -37,12 +47,12 @@ export function NewProject() {
       shake(sourceRef.current);
       return;
     }
-    if (!form.checkValidity()) {
+    if (!validateForm(form)) {
       shake(form);
-      form.reportValidity();
       return;
     }
-    // TODO(api): POST /projects — video (upload or YouTube URL), `materials`, `format` and `captions`.
+    // TODO(api): POST /projects — video (upload or YouTube URL), `range` (null = all of it), `language`,
+    // `materials`, `format` and `captions`.
     navigate("/app");
   });
 
@@ -61,9 +71,10 @@ export function NewProject() {
         </div>
       </header>
 
-      <form ref={formRef} className="form" noValidate onSubmit={handleSubmit}>
+      <form ref={formRef} className="form" noValidate onSubmit={handleSubmit} onInput={clearCustomValidity}>
         <FormSection id="video" title="Video" description="Upload a long recording or paste a YouTube link.">
-          <VideoSourceField ref={sourceRef} onChange={setSource} error={sourceError} onError={setSourceError} />
+          <VideoSourceField ref={sourceRef} onChange={changeSource} error={sourceError} onError={setSourceError} />
+          {source && <VideoRangeField source={source} value={range} onChange={setRange} />}
         </FormSection>
 
         <FormSection id="details" title="Details">
@@ -82,10 +93,6 @@ export function NewProject() {
 
         <FormSection id="format" title="Format" description="How the clips will be framed. You can change it per clip later.">
           <FormatPicker value={format} onChange={setFormat} />
-        </FormSection>
-
-        <FormSection id="subtitles" title="Subtitles" description="Applied to every clip. You can change them per clip later.">
-          <CaptionOptions value={captions} onChange={setCaptions} />
         </FormSection>
 
         <FormSection

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 import { Field } from "../components/Field";
 import { AuthLayout } from "../layouts/AuthLayout";
 import { shake, useGSAP } from "../lib/gsap";
+import { clearCustomValidity, validateForm } from "../lib/validation";
 
 export function Login() {
   const navigate = useNavigate();
@@ -12,12 +13,11 @@ export function Login() {
   const handleSubmit = contextSafe((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    if (!form.checkValidity()) {
+    if (!validateForm(form)) {
       shake(form);
-      form.reportValidity();
       return;
     }
-    // TODO(auth): ligar à API quando houver especificação do login.
+    // TODO(auth): connect to the API once the login spec exists.
     navigate("/app");
   });
 
@@ -31,7 +31,7 @@ export function Login() {
         </>
       }
     >
-      <form ref={formRef} className="auth__form" noValidate onSubmit={handleSubmit}>
+      <form ref={formRef} className="auth__form" noValidate onSubmit={handleSubmit} onInput={clearCustomValidity}>
         <Field
           label="Email"
           name="email"

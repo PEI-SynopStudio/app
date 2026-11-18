@@ -1,8 +1,10 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { Link, useParams } from "react-router";
 import { ClipPlayer } from "../components/ClipPlayer";
 import { Logo } from "../components/Logo";
-import { getSharedClip, type SharedClip } from "../data/mock";
+import { TranscriptPanel } from "../components/TranscriptPanel";
+import { clipLength, getSharedClip, type SharedClip } from "../data/mock";
+import { cueAt, getTranscripts } from "../data/transcripts";
 import { usePageEnter } from "../hooks/useMotion";
 import { usePlayback } from "../hooks/usePlayback";
 import { formatTime } from "../lib/utils";
@@ -44,18 +46,23 @@ export function Viewer() {
 }
 
 function SharedClipView({ project, clip, sharedBy }: SharedClip) {
-  const length = clip.end - clip.start;
+  const length = clipLength(clip);
   const playback = usePlayback(0, length);
+  // The language the owner picked for this clip on the project page.
+  const language = clip.subtitleLanguage ?? project.language;
+  const transcripts = useMemo(() => getTranscripts(clip, language), [clip, language]);
+  const cue = project.captions ? cueAt(transcripts.subtitles, playback.time) : undefined;
 
   return (
     <div className="viewer__layout">
-      <div data-enter>
+      <div className="viewer__player" data-enter>
         <ClipPlayer
           format={project.format}
           elapsed={playback.time}
           length={length}
           isPlaying={playback.isPlaying}
           onToggle={playback.toggle}
+          caption={cue && project.captions ? { text: cue.text, variant: project.captions.style } : null}
         />
       </div>
 
@@ -68,13 +75,20 @@ function SharedClipView({ project, clip, sharedBy }: SharedClip) {
           <span>{project.format}</span>
         </p>
 
-        {/* The Terms forbid hiding that a clip is AI-generated or where it comes from. */}
+        {/* The Terms forbid hiding that a clip is AI-generated. The source video and its timestamps stay private. */}
         <div className="viewer__source">
-          <span className="viewer__ai">AI-generated clip</span>
-          <p>
-            Cut from “{project.title}”, {formatTime(clip.start)} – {formatTime(clip.end)}.
-          </p>
+          <span className="viewer__ai">AI-edited clip</span>
+          <p>Made with SynopStudio.</p>
         </div>
+
+        <TranscriptPanel
+          transcripts={transcripts}
+          time={playback.time}
+          onSeek={playback.seek}
+          language={language}
+          originalLanguage={project.language}
+          fileName={clip.title}
+        />
 
         <div className="viewer__cta">
           <p>Turn your own long videos into clips like this one.</p>

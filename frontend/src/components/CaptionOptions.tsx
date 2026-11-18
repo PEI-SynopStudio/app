@@ -1,11 +1,5 @@
 import { useId, useRef } from "react";
-import {
-  CAPTION_LANGUAGES,
-  CAPTION_SHORT,
-  CAPTION_STYLES,
-  DEFAULT_CAPTIONS,
-  type CaptionSettings,
-} from "../data/options";
+import { CAPTION_SHORT, CAPTION_STYLES, DEFAULT_CAPTIONS, type CaptionSettings } from "../data/options";
 import { useMotion } from "../hooks/useMotion";
 import { DURATION, gsap } from "../lib/gsap";
 import { Caption } from "./Caption";
@@ -16,6 +10,7 @@ interface CaptionOptionsProps {
   onChange: (captions: CaptionSettings | null) => void;
 }
 
+/** Subtitles on/off and their look. The language is always the one spoken in the video. */
 export function CaptionOptions({ value, onChange }: CaptionOptionsProps) {
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -35,7 +30,7 @@ export function CaptionOptions({ value, onChange }: CaptionOptionsProps) {
 
   function toggle() {
     hasToggled.current = true;
-    // Turning them back on restores the last language and style.
+    // Turning them back on restores the last style.
     onChange(enabled ? null : lastChoice.current);
   }
 
@@ -58,27 +53,6 @@ export function CaptionOptions({ value, onChange }: CaptionOptionsProps) {
       {value && (
         <div className="captions__options" data-caption-options>
           <div className="field">
-            <p className="field__label" id={`${id}-language`}>
-              Language
-            </p>
-            <div className="chips" role="radiogroup" aria-labelledby={`${id}-language`}>
-              {CAPTION_LANGUAGES.map((language) => (
-                <label key={language.value} className="chip">
-                  <input
-                    className="sr-only"
-                    type="radio"
-                    name={`${id}-language`}
-                    value={language.value}
-                    checked={value.language === language.value}
-                    onChange={() => update({ language: language.value })}
-                  />
-                  {language.label}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="field">
             <p className="field__label" id={`${id}-style`}>
               Style
             </p>
@@ -94,7 +68,7 @@ export function CaptionOptions({ value, onChange }: CaptionOptionsProps) {
                     onChange={() => update({ style: style.value })}
                   />
                   <span className="style-choice__preview" aria-hidden="true">
-                    <Caption text={CAPTION_SHORT[value.language]} variant={style.value} />
+                    <Caption text={CAPTION_SHORT} variant={style.value} />
                   </span>
                   <span className="choice__label">{style.label}</span>
                 </label>

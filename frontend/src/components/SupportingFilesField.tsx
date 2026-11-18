@@ -4,7 +4,7 @@ import { DURATION, gsap } from "../lib/gsap";
 import { formatBytes, plural } from "../lib/utils";
 import { IconFile } from "./Icons";
 
-const ACCEPTED = ["pdf", "ppt", "pptx", "odp", "doc", "docx", "odt", "txt", "md"];
+const ACCEPTED = ["pdf", "ppt", "pptx", "odp", "doc", "docx", "odt", "txt"];
 const ACCEPT_ATTR = ACCEPTED.map((ext) => `.${ext}`).join(",");
 const MAX_FILES = 10;
 const MAX_MB = 50;
@@ -60,7 +60,7 @@ export function SupportingFilesField({ files, onChange }: SupportingFilesFieldPr
 
     setError(
       skipped > 0
-        ? `${plural(skipped, "file was", "files were")} skipped. Use PDF, slides, documents or text files up to ${MAX_MB} MB (${MAX_FILES} files at most).`
+        ? `${plural(skipped, "file was", "files were")} skipped. Use PDF, PPTX, DOCX or TXT files up to ${MAX_MB} MB (${MAX_FILES} files at most).`
         : null,
     );
     if (added.length === 0) return;
@@ -109,7 +109,7 @@ export function SupportingFilesField({ files, onChange }: SupportingFilesFieldPr
         <span className="dropzone__text">
           <span className="dropzone__title">Add slides, reports or notes</span>
           <span className="dropzone__hint">
-            Drag files here or <u>browse</u> · PDF, PPTX, DOCX, TXT or MD · up to {MAX_MB} MB each
+            Drag files here or <u>browse</u> · PDF, PPTX, DOCX or TXT · up to {MAX_MB} MB each
           </span>
         </span>
       </label>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBlocker, useParams } from "react-router";
 import { ConfirmDialog } from "../../components/Dialog";
-import { ToolButton } from "../../components/editor/controls";
+import { ToolButton } from "../../components/editor/Controls";
 import { ExportDialog } from "../../components/editor/ExportDialog";
 import { Inspector } from "../../components/editor/Inspector";
 import { LibraryPanel } from "../../components/editor/LibraryPanel";
@@ -359,10 +359,10 @@ function Studio({ project, clip }: { project: Project; clip: Clip }) {
       <header className="studio__bar" data-enter>
         <div className="studio__bar-start">
           <Link
-            to={`/app/projects/${project.id}`}
+             to={`/app/projects/${project.id}/clips/${clip.id}`}
             className="tool-btn"
-            aria-label={`Back to ${project.title}`}
-            title="Back to project"
+            aria-label="Back to the clip"
+            title="Back to the clip"
           >
             <IconArrowLeft />
           </Link>
