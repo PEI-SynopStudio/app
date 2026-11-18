@@ -142,5 +142,4 @@ class JobStatusResponseSchema(BaseModel):
     @computed_field
     @property
     def message(self) -> str | None:
-        """The progress text of the current step (FR02 outputs)."""
-        return JOB_STEP_MESSAGES.get(self.step)
+        return JOB_STEP_MESSAGES.get(self.job_type, {}).get(self.step)

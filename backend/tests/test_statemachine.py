@@ -262,3 +262,15 @@ def test_step_of_another_pipeline_is_rejected_with_a_clear_reason():
     
 
     
+def test_transcription_pipeline_has_no_diarizing_step():
+    job = make_job(job_type=JobTypeEnum.TRANSCRIPTION)
+    result = state_machine.apply_event(job, make_event(step=JobStepProcessingEnum.DIARIZING))
+
+    assert result.outcome == state_machine.ApplyOutcome.REJECTED
+
+
+def test_transcribing_step_covers_most_of_the_transcription_progress():
+    job = make_job(job_type=JobTypeEnum.TRANSCRIPTION)
+    result = state_machine.apply_event(job, make_event(step=JobStepProcessingEnum.TRANSCRIBING, step_progress=50))
+
+    assert result.job.progress == 47.5

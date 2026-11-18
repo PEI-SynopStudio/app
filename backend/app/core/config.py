@@ -377,6 +377,8 @@ class JobErrorCodeEnum(str, Enum):
     SILENT_AUDIO = "silent_audio"
     INTERNAL_ERROR = "internal_error"
     TIMEOUT = "timeout"
+    NO_SPEECH_DETECTED = "no_speech_detected"
+    MODEL_UNAVAILABLE = "model_unavailable"
 
 
 class AcousticProfileEnum(str, Enum):
@@ -414,15 +416,23 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
-# Progress messages shown to the user for each step (FR02 outputs).
+# Progress messages shown to the user for each step of a pipeline (FR02 and FR04 outputs).
 JOB_STEP_MESSAGES = {
-    JobStepProcessingEnum.INITIALIZING: "Preparing the video",
-    JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
-    JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
-    JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
-    JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
-    JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
-    JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    JobTypeEnum.INGESTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the video",
+        JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
+        JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
+        JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
+        JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
+        JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    },
+    JobTypeEnum.TRANSCRIPTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the audio",
+        JobStepProcessingEnum.TRANSCRIBING: "Transcribing audio",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
+        JobStepProcessingEnum.FINISHED: "Transcription completed",
+    },
 }
 PROGRESS_DECIMALS = 2
 # Every progress event is a database write, so a step reports at most once per interval.
@@ -443,8 +453,7 @@ JOB_STEP_WEIGHTS = {
     },
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
-        JobStepProcessingEnum.TRANSCRIBING: (5.0, 65.0),
-        JobStepProcessingEnum.DIARIZING: (65.0, 90.0),
+        JobStepProcessingEnum.TRANSCRIBING: (5.0, 90.0),
         JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
         JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
         JobStepProcessingEnum.FINISHED: (100.0, 100.0),
@@ -487,6 +496,9 @@ class ProjectStatus(str, Enum):
     INGESTING = "ingesting"
     INGESTED = "ingested"
     INGESTION_FAILED = "ingestion_failed"
+    TRANSCRIBING = "transcribing"
+    TRANSCRIBED = "transcribed"
+    TRANSCRIPTION_FAILED = "transcription_failed"
 
 
 class MediaAssetStatus(str, Enum):
@@ -537,6 +549,9 @@ class AuditAction(str, Enum):
     INGESTION_REQUESTED = "ingestion.requested"
     INGESTION_COMPLETED = "ingestion.completed"
     INGESTION_FAILED = "ingestion.failed"
+    TRANSCRIPTION_REQUESTED = "transcription.requested"
+    TRANSCRIPTION_COMPLETED = "transcription.completed"
+    TRANSCRIPTION_FAILED = "transcription.failed"
     PROJECT_DELETED = "project.deleted"
 
 

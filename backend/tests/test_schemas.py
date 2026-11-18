@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import uuid4
 import pytest
 from pydantic import ValidationError
@@ -5,6 +6,7 @@ from pydantic import ValidationError
 from app.schemas.enums import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.schemas.job import (
     IngestionParams,
+    JobStatusResponseSchema,
     JobUpdateEventSchema,
     TranscriptionParams,
     JobRequestMessage,
@@ -172,3 +174,17 @@ def test_client_cannot_send_internal_upload_fields():
         JobCreateSchema.model_validate(
             {"parameters": {"job_type": "ingestion", "media_id": str(uuid4()), "staged_file": "../x.mp4"}}
         )
+
+
+def test_step_message_belongs_to_the_pipeline():
+    now = datetime.now(timezone.utc)
+
+    def job(job_type, step):
+        return JobStatusResponseSchema(
+            job_id=uuid4(), project_id=uuid4(), job_type=job_type, status=JobStatusEnum.PROCESSING,
+            step=step, created_at=now, updated_at=now,
+        )
+
+    assert job(JobTypeEnum.INGESTION, JobStepProcessingEnum.FINISHED).message == "Ingestion completed"
+    assert job(JobTypeEnum.TRANSCRIPTION, JobStepProcessingEnum.FINISHED).message == "Transcription completed"
+    assert job(JobTypeEnum.TRANSCRIPTION, JobStepProcessingEnum.TRANSCRIBING).message == "Transcribing audio"
