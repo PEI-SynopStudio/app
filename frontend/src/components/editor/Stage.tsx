@@ -13,7 +13,7 @@ import {
 import { formatTimecode } from "../../lib/utils";
 import { Caption } from "../Caption";
 import { IconFilm, IconPause, IconPlay, IconSkipBack } from "../Icons";
-import { ToolButton } from "./controls";
+import { ToolButton } from "./Controls";
 
 interface StageProps {
   doc: EditorDoc;

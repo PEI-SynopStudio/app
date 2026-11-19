@@ -24,7 +24,7 @@ import {
   IconTrash,
   IconUpload,
 } from "../Icons";
-import { ToolButton } from "./controls";
+import { ToolButton } from "./Controls";
 
 type Tab = "media" | "text" | "transitions" | "subtitles";
 

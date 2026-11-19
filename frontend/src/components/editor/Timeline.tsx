@@ -50,7 +50,7 @@ import {
   IconVolume,
   IconVolumeOff,
 } from "../Icons";
-import { ToolButton, rangeFill } from "./controls";
+import { ToolButton, rangeFill } from "./Controls";
 
 type DocUpdate = (doc: EditorDoc) => EditorDoc;
 

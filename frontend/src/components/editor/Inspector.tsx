@@ -17,7 +17,7 @@ import {
 } from "../../lib/editor";
 import { formatTimecode } from "../../lib/utils";
 import { IconCopy, IconFilm, IconImage, IconMusic, IconScissors, IconText, IconTrash } from "../Icons";
-import { RangeField, Segmented } from "./controls";
+import { RangeField, Segmented } from "./Controls";
 
 interface InspectorProps {
   item: TimelineItem | null;
