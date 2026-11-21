@@ -6,9 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import (
     DOWNLOAD_FILE,
-    ERROR_JOB_DISPATCH_FAILED,
     ERROR_STORAGE_UNAVAILABLE,
-    LOG_JOB_DISPATCH_FAILED,
     REPLACEABLE_ASSET_STATUSES,
     JobErrorCodeEnum,
     MediaAssetStatus,
@@ -22,7 +20,7 @@ from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.uploads import close_upload, source_key
 from app.services.workflow.dispatcher import JobDispatcher
-from app.services.workflow.jobs import create_ingestion_job, fail_job, queue_job, dispatch_job
+from app.services.workflow.jobs import create_ingestion_job, fail_job, dispatch_job
 
 logger = logging.getLogger(__name__)
 

@@ -142,6 +142,7 @@ def test_publishing_without_watchers_does_nothing(hub):
 
     assert hub._watchers == {}
 
+
 def test_a_new_connection_receives_the_latest_job_of_any_type(client, db):
     project_id = make_project(db)
     job = Job(
@@ -164,3 +165,12 @@ def test_a_new_connection_receives_the_latest_job_of_any_type(client, db):
     assert state["step"] == "transcribing"
     assert state["message"] == "Transcribing the speech"
 
+
+def test_a_project_without_jobs_sends_no_initial_state(client, db, hub):
+    project_id = make_project(db)
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        publish(client, hub, update_for(project_id, 25.0))
+        first = websocket.receive_json()
+
+    assert first["progress"] == 25.0

@@ -51,6 +51,9 @@ def make_project(db):
         authorship_confirmed=True,
     )).id)
 
+def pending_job(db):
+    project_id = make_project(db)
+    return create_ingestion_job(db, project_id, IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
 
 def queued_job(db):
     project_id = make_project(db)
@@ -247,6 +250,28 @@ def test_queued_job_stalled_past_limit_is_failed(db):
     assert len(sweep_stalled_jobs(db)) == 1
     swept = stored(db, job)
     
+    assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
+    assert "never started" in swept.error_message
+    assert create_ingestion_job(db, str(job.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL) is not None
+
+
+def test_recently_pending_job_not_swept(db):
+    job = pending_job(db)
+    job.updated_at = utc_now() - TWO_HOURS
+    db.commit()
+
+    assert len(sweep_stalled_jobs(db)) == 0
+    assert stored(db, job).status == JobStatusEnum.PENDING
+
+
+def test_pending_job_stalled_past_limit_is_failed(db):
+    job = pending_job(db)
+    job.updated_at = utc_now() - timedelta(days=2)
+    db.commit()
+
+    assert len(sweep_stalled_jobs(db)) == 1
+    swept = stored(db, job)
+
     assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
     assert "never started" in swept.error_message
     assert create_ingestion_job(db, str(job.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL) is not None
