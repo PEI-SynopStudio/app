@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 
 from fastapi import APIRouter, Depends
@@ -35,9 +36,15 @@ def read_job(project_id: str, job_id: str, db: Session = Depends(get_db)):
 
 # Cancel an active job and notify the clients
 @router.post(JOB_CANCEL_ROUTE, response_model=JobStatusResponseSchema)
-def cancels_job(project_id: str, job_id: str, db: Session = Depends(get_db), hub: JobProgressHub = Depends(get_progress_hub)):
+async def cancel_project_job(
+    project_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    hub: JobProgressHub = Depends(get_progress_hub),
+):
+    """Async so the hub is used from the event loop; the database work runs in a thread."""
     try:
-        job = cancel_job(db, project_id, job_id)
+        job = await asyncio.to_thread(cancel_job, db, project_id, job_id)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
     
