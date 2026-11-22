@@ -33,6 +33,10 @@ class LocalStorage:
         """Remove a file of the project if it exists; `key` is relative to the project directory."""
         (self.project_dir(project_id) / key).unlink(missing_ok=True)
 
+    def delete_dir(self, project_id: str, *parts: str) -> None:
+        """Remove a directory of the project and everything in it, if it exists."""
+        shutil.rmtree(self.project_dir(project_id).joinpath(*parts), ignore_errors=True)
+
     def delete_project(self, project_id: str) -> None:
         """Remove every file of the project (US34)."""
         shutil.rmtree(self.project_dir(project_id), ignore_errors=True)

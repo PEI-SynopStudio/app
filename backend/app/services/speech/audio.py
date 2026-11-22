@@ -56,6 +56,14 @@ def iter_audio_windows(
             buffer = buffer[cut:]
 
 
+def audio_duration_seconds(wav_path: Path) -> float:
+    if not wav_path.exists():
+        raise FileNotFoundError(ERROR_FILE_NOT_FOUND.format(path=wav_path))
+    with wave.open(str(wav_path), WAV_READ_MODE) as wav:
+        _check_format(wav, wav_path)
+        return wav.getnframes() / AUDIO_SAMPLE_RATE
+
+
 def _check_format(wav: wave.Wave_read, wav_path: Path) -> None:
     actual = (wav.getframerate(), wav.getnchannels(), wav.getsampwidth())
     if actual != (AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, PCM_SAMPLE_WIDTH_BYTES):

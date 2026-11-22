@@ -353,6 +353,17 @@ ALIGNMENT_PAD_SECONDS = 0.5
 ERROR_ALIGNMENT_FAILED = "wav2vec2 could not align the words: {details}"
 TRANSCRIPT_TIME_DECIMALS = 3
 ERROR_NO_SPEECH_DETECTED = "No speech was detected in the audio."
+SPEECH_DIR = "speech"
+TRANSCRIPT_DIR = "transcript"
+TRANSCRIPT_FILE = "transcript.json"
+PARAMETER_WINDOW_SECONDS = "window_seconds"
+PARAMETER_CUT_SEARCH_SECONDS = "cut_search_seconds"
+PARAMETER_CUT_PAUSE_SECONDS = "cut_pause_seconds"
+PARAMETER_MAX_IDENTICAL_SEGMENTS = "max_identical_segments"
+PARAMETER_ALIGNMENT_PAD_SECONDS = "alignment_pad_seconds"
+ERROR_AUDIO_KEY_MISSING = "The job has no audio to transcribe."
+ERROR_TRANSCRIPTION_INTERNAL = "Unexpected error during transcription; see the worker logs."
+LOG_TRANSCRIPTION_FAILED = "Transcription failed for project %s"
 
 
 # --- Asynchronous jobs (T3.13) ---
