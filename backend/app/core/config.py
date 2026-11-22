@@ -13,6 +13,7 @@ DEFAULT_S3_ENDPOINT_URL = "http://seaweedfs:8333"
 DEFAULT_S3_ACCESS_KEY = "pei"
 DEFAULT_S3_SECRET_KEY = "pei"
 DEFAULT_S3_BUCKET = "synopstudio-media"
+
 # The address browsers use; signatures cover the host, so it cannot be the internal service name.
 DEFAULT_S3_PUBLIC_ENDPOINT_URL = "http://localhost:8333"
 DEFAULT_S3_SIGNED_URL_TTL_SECONDS = 3600
@@ -28,6 +29,8 @@ DEFAULT_SWEEP_INTERVAL_SECONDS = 60
 DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
 # A download of a time range reports no progress, and a 4 h range can take as long as the video itself.
 DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
+DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS = 6 * 3600
+
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
@@ -35,6 +38,8 @@ DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
 ENV_TRUE_VALUE = "true"
+
+
 
 
 # --- Storage layout ---
@@ -93,23 +98,33 @@ LOG_FORMAT = "%(levelname)s:     %(name)s - %(message)s"
 HEALTH_ROUTE = "/health"
 HEALTH_OK = "ok"
 ROUTE_ROOT = ""
+
 PROJECTS_ROUTE_PREFIX = "/projects"
 PROJECTS_ROUTE_TAG = "projects"
 PROJECT_ID_ROUTE = "/{project_id}"
+
 INGESTION_ROUTE_TAG = "ingestion"
 URL_INGESTION_ROUTE = "/{project_id}/ingestions/url"
 INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
+
 MEDIA_ROUTE = "/{project_id}/media"
 URL_MAX_LENGTH = 2048
 TIMECODE_MAX_LENGTH = 16
+
 ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
+
 UPLOADS_ROUTE = "/{project_id}/uploads"
 UPLOAD_ROUTE = "/{project_id}/uploads/{upload_id}"
 UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
 UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
+
 JOBS_ROUTE_TAG = "jobs"
+PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
+JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
+
+
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
@@ -148,6 +163,13 @@ JOBS_QUEUE_FORMAT = "jobs.{job_type}"
 JOB_EVENTS_EXCHANGE = "job_events"
 JOB_EVENTS_QUEUE = "jobs.events"
 JOB_EVENTS_ROUTING_KEY = "job.update"
+DEAD_LETTER_EXCHANGE = "jobs.dlx"
+DEAD_LETTER_QUEUE = "jobs.dlq"
+DEAD_LETTER_EXCHANGE_ARG = "x-dead-letter-exchange"
+QUEUE_MAX_LENGTH_ARG = "x-max-length"
+QUEUE_MESSAGE_TTL_ARG = "x-message-ttl"
+DEAD_LETTER_MAX_LENGTH = 1000
+DEAD_LETTER_TTL_MS = 7*24*3600*1000
 MEDIA_EVENTS_EXCHANGE = "media_events"
 MEDIA_INGESTED_QUEUE = "media.ingested"
 EVENT_CONSUMER_PREFETCH = 1
@@ -157,6 +179,7 @@ LOG_EVENT_INVALID = "Invalid job event discarded: %s"
 LOG_EVENT_UNKNOWN_JOB = "Event for unknown job %s discarded"
 LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
 ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
+ERROR_JOB_QUEUED_STALLED = "The job never started processing; please submit it again."
 LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s)"
 LOG_SWEEP_FAILED = "Periodic sweep failed"
 LOG_SWEEP_PURGE_FAILED = "Abandoned uploads could not be removed"
@@ -387,15 +410,26 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
-# Progress messages shown to the user for each step (FR02 outputs).
+# Progress messages shown to the user for each step of each pipeline (FR02 outputs).
 JOB_STEP_MESSAGES = {
-    JobStepProcessingEnum.INITIALIZING: "Preparing the video",
-    JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
-    JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
-    JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
-    JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
-    JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
-    JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    JobTypeEnum.INGESTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the video",
+        JobStepProcessingEnum.DOWNLOADING_MEDIA: "Downloading from URL",
+        JobStepProcessingEnum.INSPECTING_MEDIA: "Inspecting media",
+        JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
+        JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
+        JobStepProcessingEnum.FINISHED: "Ingestion completed",
+    },
+    JobTypeEnum.TRANSCRIPTION: {
+        JobStepProcessingEnum.INITIALIZING: "Preparing the transcription",
+        JobStepProcessingEnum.TRANSCRIBING: "Transcribing the speech",
+        JobStepProcessingEnum.DIARIZING: "Identifying the speakers",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
+        JobStepProcessingEnum.FINISHED: "Transcription completed",
+    },
 }
 PROGRESS_DECIMALS = 2
 # Every progress event is a database write, so a step reports at most once per interval.
@@ -509,6 +543,7 @@ class AuditAction(str, Enum):
     UPLOAD_STARTED = "upload.started"
     INGESTION_REQUESTED = "ingestion.requested"
     INGESTION_COMPLETED = "ingestion.completed"
+    INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
     PROJECT_DELETED = "project.deleted"
 
@@ -573,6 +608,7 @@ class Settings:
     default_language: str
     database_url: str
     database_echo: bool
+    job_queued_stalled_after_seconds: int
 
 
 @lru_cache
@@ -599,6 +635,9 @@ def get_settings() -> Settings:
         job_stalled_after_seconds=int(os.environ.get("JOB_STALLED_AFTER_SECONDS", DEFAULT_JOB_STALLED_AFTER_SECONDS)),
         job_download_stalled_after_seconds=int(
             os.environ.get("JOB_DOWNLOAD_STALLED_AFTER_SECONDS", DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS)
+        ),
+        job_queued_stalled_after_seconds=int(
+            os.environ.get("JOB_QUEUED_STALLED_AFTER_SECONDS", DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS)
         ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),

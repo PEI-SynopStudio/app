@@ -13,10 +13,14 @@ from app.core.config import (
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
+    ERROR_JOB_QUEUED_STALLED,
     ERROR_JOB_STALLED,
+    ERROR_JOB_DISPATCH_FAILED,
     JOB_ACTIVE_INGESTION_INDEX,
+    JOB_ACTIVE_STATUSES,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
+    LOG_JOB_DISPATCH_FAILED,
     ApplyOutcome,
     AuditAction,
     JobErrorCodeEnum,
@@ -28,9 +32,10 @@ from app.core.config import (
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
 from app.database.models import Job
-from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema
+from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema, JobRequestMessage
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
+from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.ingestion_results import record_ingestion_outcome
 from app.services.workflow.state_machine import ApplyResult, JobSnapshot, apply_event, change_status
 
@@ -87,6 +92,22 @@ def get_job(db: Session, project_id: str, job_id: str) -> Job:
         raise JobNotFoundError()
     return job
 
+def latest_project_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id)
+        .order_by(Job.created_at.desc())
+    )
+    return db.scalars(query).first()
+
+
+def list_project_jobs(db: Session, project_id: uuid.UUID) -> List[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id)
+        .order_by(Job.created_at.desc())
+    )
+    return list(db.scalars(query).all())
 
 def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
     query = (
@@ -101,9 +122,30 @@ def queue_job(db: Session, job: Job) -> Job:
     """Committed before publishing, so a worker event never arrives while the job is still pending."""
     return _change_status(db, job, JobStatusEnum.QUEUED)
 
+def dispatch_job(db: Session, dispatcher: JobDispatcher, job: Job, request: JobRequestMessage) -> Job:
+    queue_job(db, job)
+    try:
+        dispatcher.dispatch(request)
+    except Exception:
+        logger.exception(LOG_JOB_DISPATCH_FAILED, job.id)
+        fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_DISPATCH_FAILED)
+        raise
+    return job
 
 def fail_job(db: Session, job: Job, error_code: JobErrorCodeEnum, error_message: str) -> Job:
     return _change_status(db, job, JobStatusEnum.FAILED, error_code, error_message)
+
+def cancel_job(db: Session, project_id: str, job_id: str) -> Job:
+    try:
+        parsed_id = uuid.UUID(job_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(ERROR_INVALID_JOB_ID.format(job_id=job_id))
+    
+    job = db.get(Job, parsed_id, with_for_update=True)
+    if job is None or str(job.project_id) != project_id:
+        raise JobNotFoundError()
+    
+    return _change_status(db, job, JobStatusEnum.CANCELLED)
 
 
 # Apply a worker event to the stored job, one event at a time per job.
@@ -127,13 +169,14 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
 # Fail the running jobs whose worker went silent, so they do not block their projects forever.
 # Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (periodic sweep, no retries).
 def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
-    """Only running jobs: a queued job is just waiting for a free worker. Returns the new state of the failed jobs."""
+    """Sweeps active jobs (pending, queued or processing) past their time limit. Returns the new state of the failed jobs."""
     failed = []
-    for job_id in db.scalars(select(Job.id).where(Job.status == JobStatusEnum.PROCESSING)).all():
+    for job_id in db.scalars(select(Job.id).where(Job.status.in_(JOB_ACTIVE_STATUSES))).all():
         # Locked and read again, so an event that arrives in the meantime is not overwritten.
         job = db.get(Job, job_id, with_for_update=True, populate_existing=True)
-        if job is not None and job.status == JobStatusEnum.PROCESSING and _has_stalled(job):
-            failed.append(JobStatusResponseSchema.model_validate(fail_job(db, job, JobErrorCodeEnum.TIMEOUT, ERROR_JOB_STALLED)))
+        if job is not None and job.status in JOB_ACTIVE_STATUSES and _has_stalled(job):
+            message = ERROR_JOB_STALLED if job.status == JobStatusEnum.PROCESSING else ERROR_JOB_QUEUED_STALLED
+            failed.append(JobStatusResponseSchema.model_validate(fail_job(db, job, JobErrorCodeEnum.TIMEOUT, message)))
         else:
             db.commit()
     return failed
@@ -141,8 +184,12 @@ def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
 
 def _has_stalled(job: Job) -> bool:
     settings = get_settings()
-    downloading = job.step == JobStepProcessingEnum.DOWNLOADING_MEDIA
-    limit = settings.job_download_stalled_after_seconds if downloading else settings.job_stalled_after_seconds
+    if job.status != JobStatusEnum.PROCESSING:
+        limit = settings.job_queued_stalled_after_seconds
+    elif job.step == JobStepProcessingEnum.DOWNLOADING_MEDIA:
+        limit = settings.job_download_stalled_after_seconds
+    else:
+        limit = settings.job_stalled_after_seconds
     return utc_now() - (job.last_event_at or job.updated_at) > timedelta(seconds=limit)
 
 

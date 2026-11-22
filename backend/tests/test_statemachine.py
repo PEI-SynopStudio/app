@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.exceptions import InvalidStateTransitionError, JobAlreadyTerminalError
+from app.core.exceptions import InvalidStateTransitionError
 from app.schemas.enums import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.services.workflow import state_machine
 from app.schemas.job import JobUpdateEventSchema
