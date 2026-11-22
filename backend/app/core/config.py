@@ -349,6 +349,8 @@ ERROR_UNEXPECTED_WAV_FORMAT = (
 )
 WHISPER_MAX_IDENTICAL_SEGMENTS = 2
 ERROR_TRANSCRIPTION_FAILED = "faster-whisper could not transcribe the audio: {details}"
+ALIGNMENT_PAD_SECONDS = 0.5
+ERROR_ALIGNMENT_FAILED = "wav2vec2 could not align the words: {details}"
 
 
 # --- Asynchronous jobs (T3.13) ---
