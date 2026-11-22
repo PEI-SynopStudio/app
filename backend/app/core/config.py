@@ -338,6 +338,15 @@ CONFIDENCE_MAX = 1.0
 TRANSCRIPT_COUNT_MIN = 0
 SEGMENT_MIN_WORDS = 1
 ERROR_TRANSCRIPT_TIME_ORDER = "Invalid interval: end ({end:.3f} s) is before start ({start:.3f} s)."
+TRANSCRIPTION_CUT_SEARCH_SECONDS = 5.0
+TRANSCRIPTION_CUT_FRAME_SECONDS = 0.02
+TRANSCRIPTION_CUT_PAUSE_SECONDS = 0.2
+PCM_NUMPY_DTYPE = "<i2"
+PCM_SAMPLE_WIDTH_BYTES = 2
+ERROR_UNEXPECTED_WAV_FORMAT = (
+    "Expected a {rate} Hz mono 16-bit WAV, got {actual_rate} Hz, {channels} channel(s), "
+    "{width}-byte samples: {path}"
+)
 
 
 # --- Asynchronous jobs (T3.13) ---
