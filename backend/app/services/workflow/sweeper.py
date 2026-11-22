@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import LOG_SWEEP_DONE, LOG_SWEEP_FAILED, LOG_SWEEP_PURGE_FAILED, get_settings
 from app.schemas.job import JobStatusResponseSchema
+from app.services.auth.auth import purge_expired_sessions
 from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.uploads import purge_expired_uploads
 from app.services.workflow.jobs import sweep_stalled_jobs
@@ -14,8 +15,10 @@ from app.services.workflow.progress_hub import JobProgressHub
 logger = logging.getLogger(__name__)
 
 
-# Periodically close the jobs whose worker went silent and remove the uploads that were abandoned.
-# Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (no retries, periodic sweep).
+# Periodically close the jobs whose worker went silent, remove the uploads that were abandoned
+# and delete the sign-in sessions that expired.
+# Source: MS2 FR02 – Step 3 ('Ingestion Failed' with details); project plan decision 7 (no retries, periodic sweep);
+# MS3 §1.1.2 (session data kept only while needed).
 async def run_periodic_sweep(
     session_factory: sessionmaker[Session], open_object_storage: Callable[[], ObjectStorage], hub: JobProgressHub
 ) -> None:
@@ -36,12 +39,13 @@ def sweep_once(
     """Returns the new state of the jobs it failed, for the clients watching them."""
     with session_factory() as db:
         stalled = sweep_stalled_jobs(db)
+        sessions = purge_expired_sessions(db)
         # A storage outage must not hide the jobs just failed from the clients watching them.
         try:
             expired = purge_expired_uploads(db, open_object_storage())
         except ObjectStorageError:
             logger.exception(LOG_SWEEP_PURGE_FAILED)
             expired = 0
-    if stalled or expired:
-        logger.info(LOG_SWEEP_DONE, len(stalled), expired)
+    if stalled or expired or sessions:
+        logger.info(LOG_SWEEP_DONE, len(stalled), expired, sessions)
     return stalled

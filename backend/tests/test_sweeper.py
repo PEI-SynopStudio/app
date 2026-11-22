@@ -19,9 +19,10 @@ from app.core.config import (
     get_settings,
 )
 from app.database.base import utc_now
-from app.database.models import AuditLog, Job, MediaAsset, Project, UploadSession
+from app.database.models import AuditLog, AuthSession, Job, MediaAsset, Project, UploadSession
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
+from app.services.auth.auth import create_session
 from app.services.projects.projects import create_project
 from app.services.video.uploads import purge_expired_uploads, start_upload
 from app.services.workflow import sweeper
@@ -189,6 +190,20 @@ def test_a_storage_outage_does_not_hide_the_stalled_jobs(session_factory, db, ob
     assert "Abandoned uploads could not be removed" in caplog.text
     db.expire_all()
     assert db.get(UploadSession, session_id) is not None
+
+
+def test_expired_sessions_are_deleted_and_live_ones_kept(session_factory, db, object_storage, user, caplog):
+    live = create_session(db, user)
+    expired = create_session(db, user)
+    expired.session.expires_at = utc_now() - timedelta(seconds=1)
+    db.commit()
+
+    with caplog.at_level(logging.INFO, logger="app"):
+        sweep_once(session_factory, lambda: object_storage)
+
+    db.expire_all()
+    assert db.scalars(select(AuthSession.id)).all() == [live.session.id]
+    assert "1 expired session(s)" in caplog.text
 
 
 def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, object_storage, monkeypatch):
