@@ -351,6 +351,8 @@ WHISPER_MAX_IDENTICAL_SEGMENTS = 2
 ERROR_TRANSCRIPTION_FAILED = "faster-whisper could not transcribe the audio: {details}"
 ALIGNMENT_PAD_SECONDS = 0.5
 ERROR_ALIGNMENT_FAILED = "wav2vec2 could not align the words: {details}"
+TRANSCRIPT_TIME_DECIMALS = 3
+ERROR_NO_SPEECH_DETECTED = "No speech was detected in the audio."
 
 
 # --- Asynchronous jobs (T3.13) ---
