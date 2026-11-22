@@ -347,6 +347,8 @@ ERROR_UNEXPECTED_WAV_FORMAT = (
     "Expected a {rate} Hz mono 16-bit WAV, got {actual_rate} Hz, {channels} channel(s), "
     "{width}-byte samples: {path}"
 )
+WHISPER_MAX_IDENTICAL_SEGMENTS = 2
+ERROR_TRANSCRIPTION_FAILED = "faster-whisper could not transcribe the audio: {details}"
 
 
 # --- Asynchronous jobs (T3.13) ---
