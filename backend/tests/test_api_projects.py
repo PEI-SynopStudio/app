@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from app.core.config import AuditAction, JobTypeEnum, MediaAssetStatus, SourceType
 from app.database.models import AuditLog, Job, MediaAsset
 from app.main import app
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import ObjectStorageError, get_object_storage
 from conftest import sign_in
@@ -152,6 +153,15 @@ def test_a_project_with_an_active_ingestion_cannot_be_deleted(client, db):
 
     assert client.delete(f"/projects/{project_id}").status_code == 409
     assert client.get(f"/projects/{project_id}").status_code == 200
+
+
+def test_deleting_a_project_records_who_deleted_it(client, db, user):
+    project_id = new_project(client)
+
+    client.delete(f"/projects/{project_id}")
+
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == AuditAction.PROJECT_DELETED))
+    assert entry.actor_hash == actor_hash(user.id)
 
 
 def test_deleting_an_unknown_project_is_not_found(client):

@@ -27,7 +27,7 @@ from app.core.config import (
 )
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
-from app.database.models import Job
+from app.database.models import Job, User
 from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
@@ -49,6 +49,7 @@ def create_ingestion_job(
     params: IngestionParams,
     source: str,
     media_asset_id: Optional[uuid.UUID] = None,
+    actor: Optional[User] = None,
 ) -> Job:
     """Raises IngestionAlreadyRunningError when the project already has an active ingestion."""
     project = require_ingestion_allowed(db, project_id)
@@ -73,6 +74,7 @@ def create_ingestion_job(
         project.id,
         AuditAction.INGESTION_REQUESTED,
         {AUDIT_DETAIL_JOB_ID: str(job.id), AUDIT_DETAIL_SOURCE: source},
+        actor=actor,
     )
     db.commit()
     return job

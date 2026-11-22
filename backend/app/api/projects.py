@@ -40,11 +40,12 @@ def read(project: Project = Depends(require_project_access)):
 )
 def delete(
     project_id: str,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
-        delete_project(db, storage, object_storage, project_id)
+        delete_project(db, storage, object_storage, project_id, actor=user)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc

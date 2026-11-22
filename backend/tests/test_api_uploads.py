@@ -8,6 +8,7 @@ from app.core.config import AuditAction, JobErrorCodeEnum, MediaAssetStatus, get
 from app.database.base import utc_now
 from app.database.models import AuditLog, Job, MediaAsset, UploadSession
 from app.main import app
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
 from app.services.workflow.jobs import fail_job
@@ -292,6 +293,23 @@ def test_start_upload_registers_the_asset_and_the_audit_entry(live, db):
     assert db.get(UploadSession, uuid.UUID(upload_id)).expires_at > utc_now()
     actions = db.scalars(select(AuditLog.action).where(AuditLog.project_id == uuid.UUID(project_id))).all()
     assert AuditAction.UPLOAD_STARTED in actions
+
+
+def test_upload_and_its_ingestion_record_who_did_them(live, db, user, monkeypatch):
+    client, dispatcher, _ = live
+    project_id = new_project(client)
+    upload_id = upload_all(client, project_id, b"x" * 10_000)
+    monkeypatch.setattr(dispatcher, "dispatch", lambda request: None)
+
+    client.post(f"/projects/{project_id}/uploads/{upload_id}/complete")
+
+    query = select(AuditLog.action, AuditLog.actor_hash).where(
+        AuditLog.action.in_([AuditAction.UPLOAD_STARTED, AuditAction.INGESTION_REQUESTED])
+    )
+    assert set(db.execute(query).all()) == {
+        (AuditAction.UPLOAD_STARTED, actor_hash(user.id)),
+        (AuditAction.INGESTION_REQUESTED, actor_hash(user.id)),
+    }
 
 
 def test_upload_of_another_project_is_not_found(live):

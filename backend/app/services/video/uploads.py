@@ -30,7 +30,7 @@ from app.core.config import (
     get_settings,
 )
 from app.database.base import utc_now
-from app.database.models import MediaAsset, UploadSession
+from app.database.models import MediaAsset, UploadSession, User
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.storage.object_storage import ObjectStorage
@@ -58,6 +58,7 @@ def start_upload(
     file_name: str,
     size_bytes: int,
     content_type: Optional[str],
+    actor: Optional[User] = None,
 ) -> UploadSession:
     """Refuse at once when the licence is not confirmed (FR01) or the file is not acceptable."""
     project = require_ingestion_allowed(db, project_id)
@@ -93,6 +94,7 @@ def start_upload(
         project.id,
         AuditAction.UPLOAD_STARTED,
         {AUDIT_DETAIL_FILE_NAME: file_name, AUDIT_DETAIL_SIZE_BYTES: size_bytes},
+        actor=actor,
     )
     db.commit()
     return session

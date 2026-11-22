@@ -3,11 +3,13 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.core.config import MediaAssetStatus, SourceType
+from app.core.config import AuditAction, MediaAssetStatus, SourceType
 from app.core.exceptions import JobDispatchError
-from app.database.models import AudioTrack, MediaAsset
+from app.database.models import AudioTrack, AuditLog, MediaAsset
 from app.main import app
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
 from app.services.video.sources import RemoteVideoInfo
@@ -162,6 +164,15 @@ def test_url_ingestion_with_invalid_project_id_is_rejected(client):
     response = client.post("/projects/not-a-uuid/ingestions/url", json={"url": SAMPLE_URL})
 
     assert response.status_code == 422
+
+
+def test_url_ingestion_records_who_asked_for_it(client, db, user):
+    project_id = new_project(client)
+
+    client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
+
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == AuditAction.INGESTION_REQUESTED))
+    assert entry.actor_hash == actor_hash(user.id)
 
 
 def test_second_ingestion_while_running_is_conflict(client):

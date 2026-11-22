@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import require_project_access
+from app.api.dependencies import get_current_user, require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     ERROR_INGESTION_NOT_STARTED,
@@ -18,7 +18,7 @@ from app.core.config import (
     URL_MAX_LENGTH,
     JobStatusEnum,
 )
-from app.database.models import Project
+from app.database.models import Project, User
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
@@ -56,6 +56,7 @@ class IngestionOverview(BaseModel):
 def ingest_url(
     project_id: str,
     body: UrlIngestionRequest,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     object_storage: ObjectStorage = Depends(get_object_storage),
@@ -66,7 +67,7 @@ def ingest_url(
         # Format and order only; the video duration is known after the probe, inside the job.
         validate_time_range(body.start_time, body.end_time, math.inf)
         return submit_url_ingestion(
-            db, storage, object_storage, dispatcher, project_id, url, body.start_time, body.end_time
+            db, storage, object_storage, dispatcher, project_id, url, body.start_time, body.end_time, actor=user
         )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc

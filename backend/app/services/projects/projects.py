@@ -42,7 +42,11 @@ def create_project(db: Session, data: ProjectCreate, owner: Optional[User] = Non
     db.add(project)
     db.flush()  # assigns the ID the audit entries refer to
     record_audit(
-        db, project.id, AuditAction.PROJECT_CREATED, data.model_dump(mode=JSON_DUMP_MODE, include=AUDIT_PROJECT_FIELDS)
+        db,
+        project.id,
+        AuditAction.PROJECT_CREATED,
+        data.model_dump(mode=JSON_DUMP_MODE, include=AUDIT_PROJECT_FIELDS),
+        actor=owner,
     )
     if project.licence_confirmed and project.authorship_confirmed:
         record_audit(
@@ -50,6 +54,7 @@ def create_project(db: Session, data: ProjectCreate, owner: Optional[User] = Non
             project.id,
             AuditAction.LICENCE_CONFIRMED,
             data.model_dump(mode=JSON_DUMP_MODE, include=AUDIT_LICENCE_FIELDS),
+            actor=owner,
         )
     db.commit()
     return project
@@ -78,7 +83,13 @@ def require_ingestion_allowed(db: Session, project_id: str) -> Project:
 
 # Delete a project with its videos, jobs and uploads; only the audit records remain.
 # Source: US34; MS3 §1.4.3 (project deletion, licence and editorial records kept for 12 months); FR18.
-def delete_project(db: Session, storage: LocalStorage, object_storage: ObjectStorage, project_id: str) -> None:
+def delete_project(
+    db: Session,
+    storage: LocalStorage,
+    object_storage: ObjectStorage,
+    project_id: str,
+    actor: Optional[User] = None,
+) -> None:
     """Refused while a job is active, because its worker would keep writing files for the project.
 
     The objects go first: if the storage fails, the project stays and the deletion can be repeated,
@@ -90,7 +101,11 @@ def delete_project(db: Session, storage: LocalStorage, object_storage: ObjectSto
         raise ProjectBusyError(ERROR_PROJECT_BUSY.format(project_id=project_id))
     object_storage.delete_project(project_id)
     record_audit(
-        db, project.id, AuditAction.PROJECT_DELETED, {field: getattr(project, field) for field in AUDIT_PROJECT_FIELDS}
+        db,
+        project.id,
+        AuditAction.PROJECT_DELETED,
+        {field: getattr(project, field) for field in AUDIT_PROJECT_FIELDS},
+        actor=actor,
     )
     db.delete(project)
     db.commit()

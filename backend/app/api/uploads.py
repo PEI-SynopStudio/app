@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import require_project_access
+from app.api.dependencies import get_current_user, require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     CONTENT_TYPE_MAX_LENGTH,
@@ -19,7 +19,7 @@ from app.core.config import (
     UPLOAD_ROUTE,
     UPLOADS_ROUTE,
 )
-from app.database.models import UploadSession
+from app.database.models import UploadSession, User
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
@@ -82,11 +82,14 @@ def _progress(object_storage: ObjectStorage, session: UploadSession) -> UploadPr
 def create_upload(
     project_id: str,
     body: UploadStart,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
-        session = start_upload(db, object_storage, project_id, body.file_name, body.size_bytes, body.content_type)
+        session = start_upload(
+            db, object_storage, project_id, body.file_name, body.size_bytes, body.content_type, actor=user
+        )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
     return _progress(object_storage, session)
@@ -139,6 +142,7 @@ def complete_upload(
     project_id: str,
     upload_id: str,
     body: Optional[UploadCompletion] = None,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     object_storage: ObjectStorage = Depends(get_object_storage),
@@ -152,7 +156,7 @@ def complete_upload(
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(object_storage, session)
         return submit_upload_ingestion(
-            db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time
+            db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time, actor=user
         )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
