@@ -3,16 +3,36 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import JobErrorCodeEnum
+from app.core.exceptions import JobDispatchError
 from app.main import app
-from app.services.workflow.jobs import apply_job_event
-from test_submission import finished_asset, make_project, storage  # noqa: F401
+from app.schemas.job import TranscriptionParams
+from app.services.workflow.dispatcher import JobDispatcher
+from app.services.workflow.jobs import apply_job_event, create_transcription_job, fail_job, queue_job
+from app.services.workflow.rabbitmq import get_dispatcher
+from test_submission import dispatcher, finished_asset, make_project, storage  # noqa: F401
 from test_transcription_results import completed, transcription  # noqa: F401
 
 
+class UnreachableBroker(JobDispatcher):
+    def dispatch(self, request):
+        raise JobDispatchError("The job could not be queued; please try again.")
+
+
 @pytest.fixture
-def client(db_override):
+def client(db_override, dispatcher):
+    app.dependency_overrides[get_dispatcher] = lambda: dispatcher
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def failed(db, storage):
+    project_id = make_project(db)
+    asset, _ = finished_asset(db, storage, project_id)
+    job = queue_job(db, create_transcription_job(db, project_id, TranscriptionParams(media_id=asset.id), asset.id))
+    fail_job(db, job, JobErrorCodeEnum.MODEL_UNAVAILABLE, "no weights")
+    return project_id, asset
 
 
 @pytest.fixture
@@ -67,3 +87,50 @@ def test_an_unknown_project_is_not_found(client):
 
 def test_an_invalid_project_id_is_rejected(client):
     assert client.get("/projects/not-a-uuid/transcript").status_code == 422
+
+
+def test_a_failed_transcription_can_be_started_again(client, dispatcher, failed):
+    project_id, asset = failed
+
+    response = client.post(f"/projects/{project_id}/transcription")
+
+    assert response.status_code == 202
+    assert (response.json()["job_type"], response.json()["status"]) == ("transcription", "queued")
+    [request] = dispatcher.requests
+    assert (request.parameters.media_id, request.audio_key) == (asset.id, "audio/audio.wav")
+
+
+def test_a_second_request_while_one_is_running_is_conflict(client, failed):
+    project_id, _ = failed
+    client.post(f"/projects/{project_id}/transcription")
+
+    response = client.post(f"/projects/{project_id}/transcription")
+
+    assert response.status_code == 409
+
+
+def test_a_video_already_transcribed_is_conflict(client, stored):
+    response = client.post(f"/projects/{stored}/transcription")
+
+    assert response.status_code == 409
+    assert "already transcribed" in response.json()["detail"]
+
+
+def test_a_project_without_licence_is_forbidden(client, db, storage):
+    project_id = make_project(db, licence=False)
+    finished_asset(db, storage, project_id)
+
+    assert client.post(f"/projects/{project_id}/transcription").status_code == 403
+
+
+def test_a_project_without_a_finished_video_is_not_found(client, db):
+    project_id = make_project(db)
+
+    assert client.post(f"/projects/{project_id}/transcription").status_code == 404
+
+
+def test_an_unreachable_broker_answers_503(client, failed):
+    project_id, _ = failed
+    app.dependency_overrides[get_dispatcher] = UnreachableBroker
+
+    assert client.post(f"/projects/{project_id}/transcription").status_code == 503

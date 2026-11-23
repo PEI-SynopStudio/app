@@ -7,7 +7,7 @@ from app.core.config import ERROR_STORAGE_UNAVAILABLE, LOG_STORAGE_UNAVAILABLE
 from app.core.exceptions import JobDispatchError, JobNotFoundError
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectBusyError, ProjectNotFoundError
 from app.services.storage.object_storage import ObjectStorageError
-from app.services.transcripts.transcripts import TranscriptNotFoundError
+from app.services.transcripts.transcripts import TranscriptAlreadyExistsError, TranscriptNotFoundError
 from app.services.video.playback import MediaNotReadyError
 from app.services.video.uploads import UploadIncompleteError, UploadNotFoundError
 from app.services.workflow.jobs import IngestionAlreadyRunningError, TranscriptionAlreadyRunningError
@@ -28,6 +28,7 @@ SERVICE_ERRORS = (
     UploadIncompleteError,
     MediaNotReadyError,
     TranscriptNotFoundError,
+    TranscriptAlreadyExistsError,
 )
 
 
@@ -37,7 +38,16 @@ def http_error(exc: Exception) -> HTTPException:
         code = status.HTTP_404_NOT_FOUND
     elif isinstance(exc, LicenceNotConfirmedError):
         code = status.HTTP_403_FORBIDDEN
-    elif isinstance(exc, (IngestionAlreadyRunningError, TranscriptionAlreadyRunningError, UploadIncompleteError, ProjectBusyError)):
+    elif isinstance(
+        exc,
+        (
+            IngestionAlreadyRunningError,
+            TranscriptionAlreadyRunningError,
+            TranscriptAlreadyExistsError,
+            UploadIncompleteError,
+            ProjectBusyError,
+        ),
+    ):
         code = status.HTTP_409_CONFLICT
     elif isinstance(exc, JobDispatchError):
         code = status.HTTP_503_SERVICE_UNAVAILABLE

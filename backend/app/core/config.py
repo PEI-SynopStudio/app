@@ -116,8 +116,10 @@ JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
 TRANSCRIPTS_ROUTE_TAG = "transcripts"
 TRANSCRIPT_ROUTE = "/{project_id}/transcript"
+TRANSCRIPTION_ROUTE = "/{project_id}/transcription"
 ERROR_TRANSCRIPT_NOT_FOUND = "Project {project_id} has no transcript yet."
 ERROR_TRANSCRIPT_RANGE = "end must be after start."
+ERROR_TRANSCRIPT_ALREADY_EXISTS = "The video of project {project_id} is already transcribed."
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
