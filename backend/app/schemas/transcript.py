@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+import uuid
+from datetime import datetime
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.config import (
     CONFIDENCE_MAX,
@@ -62,3 +64,28 @@ class TranscriptionOutput(BaseModel):
     segment_count: Count
     word_count: Count
     aligned_word_count: Count
+
+
+class TranscriptMetadata(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    media_asset_id: uuid.UUID
+    job_id: Optional[uuid.UUID]
+    ai_generated: bool
+    language: str
+    model_name: str
+    model_revision: str
+    alignment_model_name: str
+    alignment_model_revision: str
+    parameters: dict[str, Any]
+    time_offset_seconds: float
+    segment_count: int
+    word_count: int
+    aligned_word_count: int
+    created_at: datetime
+
+
+class TranscriptResponse(TranscriptMetadata):
+
+    segments: list[TranscriptSegment]
