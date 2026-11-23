@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import ingestion, jobs, progress, projects, uploads
+from app.api import clips, documents, ingestion, jobs, progress, projects, uploads
 from app.api.errors import storage_unavailable
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
 from app.database.session import get_session_factory
@@ -45,6 +45,8 @@ app.include_router(ingestion.router)
 app.include_router(uploads.router)
 app.include_router(jobs.router)
 app.include_router(progress.router)
+app.include_router(clips.router)
+app.include_router(documents.router)
 
 @app.get(HEALTH_ROUTE)
 def health():
