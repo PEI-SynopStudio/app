@@ -10,7 +10,7 @@ from app.schemas.job import IngestionParams, JobRequestMessage, JobUpdateEventSc
 from app.services.storage.local import LocalStorage
 from app.services.workflow import rabbitmq as rabbitmq_module
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
-from app.workers import ingestion_worker
+from app.workers import ingestion_worker, job_worker
 from app.workers.ingestion_worker import IngestionWorker
 from in_memory_object_storage import InMemoryObjectStorage
 from test_rabbitmq import TEST_RABBITMQ_URL, broker_is_running
@@ -165,7 +165,7 @@ def test_invalid_message_is_discarded(queues, storage, caplog):
 
 def emit_with_failures(monkeypatch, failures):
     """Call the worker's emit with a publisher that fails a number of times first; returns how many calls it took."""
-    monkeypatch.setattr(ingestion_worker, "WORKER_EVENT_RETRY_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(job_worker, "WORKER_EVENT_RETRY_INTERVAL_SECONDS", 0)
     attempts = []
 
     async def flaky_publish(event):
@@ -189,7 +189,7 @@ def test_event_is_sent_again_while_the_broker_is_restarting(monkeypatch):
 
 
 def test_event_gives_up_when_the_broker_stays_down(monkeypatch):
-    monkeypatch.setattr(ingestion_worker, "WORKER_EVENT_RETRY_SECONDS", 0)
+    monkeypatch.setattr(job_worker, "WORKER_EVENT_RETRY_SECONDS", 0)
 
     with pytest.raises(AMQPError):
         emit_with_failures(monkeypatch, failures=1000)
