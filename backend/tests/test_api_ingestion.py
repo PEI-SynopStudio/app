@@ -4,9 +4,9 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import MediaAssetStatus, SourceType
+from app.core.config import JobStatusEnum, JobTypeEnum, MediaAssetStatus, SourceType
 from app.core.exceptions import JobDispatchError
-from app.database.models import AudioTrack, MediaAsset
+from app.database.models import AudioTrack, Job, MediaAsset
 from app.main import app
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
@@ -170,6 +170,17 @@ def test_second_ingestion_while_running_is_conflict(client):
     response = client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
 
     assert response.status_code == 409
+
+
+def test_url_ingestion_during_a_transcription_is_conflict(client, db):
+    project_id = new_project(client)
+    db.add(Job(project_id=uuid.UUID(project_id), job_type=JobTypeEnum.TRANSCRIPTION, status=JobStatusEnum.PROCESSING, parameters={}))
+    db.commit()
+
+    response = client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
+
+    assert response.status_code == 409
+    assert "being transcribed" in response.json()["detail"]
 
 
 def test_status_before_any_ingestion_is_not_found(client):

@@ -77,7 +77,7 @@ WAVEFORM_CONTENT_TYPE = "application/json"
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
 ERROR_PROJECT_NOT_FOUND = "Project not found: {project_id}"
-ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while an ingestion is running."
+ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while a job is running."
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
@@ -144,6 +144,7 @@ LOG_UPLOAD_DISCARD_FAILED = "Could not discard the rejected upload of project %s
 MEDIA_INGESTED_EVENT = "media.ingested"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
 ERROR_TRANSCRIPTION_ALREADY_RUNNING = "A transcription is already running for project {project_id}."
+ERROR_INGESTION_DURING_TRANSCRIPTION = "The video of project {project_id} cannot be replaced while it is being transcribed."
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 

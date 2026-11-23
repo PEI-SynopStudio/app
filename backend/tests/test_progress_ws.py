@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import JobStatusEnum, JobTypeEnum, LicenseType
+from app.database.models import Job
 from app.database.session import get_session_factory
 from app.main import app
 from app.schemas.job import IngestionParams, JobStatusResponseSchema
@@ -71,6 +72,19 @@ def test_a_new_connection_receives_the_current_state(client, db):
         state = websocket.receive_json()
 
     assert (state["job_id"], state["status"]) == (str(job.id), "queued")
+
+
+def test_a_new_connection_receives_the_latest_job_of_any_type(client, db):
+    project_id = make_project(db)
+    queue_job(db, create_ingestion_job(db, str(project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL))
+    transcription = Job(project_id=project_id, job_type=JobTypeEnum.TRANSCRIPTION, status=JobStatusEnum.QUEUED, parameters={})
+    db.add(transcription)
+    db.commit()
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        state = websocket.receive_json()
+
+    assert (state["job_id"], state["job_type"]) == (str(transcription.id), "transcription")
 
 
 def test_updates_are_sent_while_connected(client, db, hub):

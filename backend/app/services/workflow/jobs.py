@@ -12,10 +12,12 @@ from app.core.config import (
     AUDIT_DETAIL_JOB_ID,
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
+    ERROR_INGESTION_DURING_TRANSCRIPTION,
     ERROR_TRANSCRIPTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
     ERROR_JOB_STALLED,
     JOB_ACTIVE_INGESTION_INDEX,
+    JOB_ACTIVE_STATUSES,
     JOB_ACTIVE_TRANSCRIPTION_INDEX,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
@@ -58,8 +60,12 @@ def create_ingestion_job(
     source: str,
     media_asset_id: Optional[uuid.UUID] = None,
 ) -> Job:
-    """Raises IngestionAlreadyRunningError when the project already has an active ingestion."""
+    """Raises IngestionAlreadyRunningError when the project already has an active ingestion.
+
+    Raises TranscriptionAlreadyRunningError while the current video is being transcribed: its worker still reads the audio.
+    """
     project = require_ingestion_allowed(db, project_id)
+    _require_no_active_transcription(db, project.id)
     job = Job(
         project_id=project.id,
         media_asset_id=media_asset_id,
@@ -119,6 +125,10 @@ def get_job(db: Session, project_id: str, job_id: str) -> Job:
     if job is None or str(job.project_id) != project_id:
         raise JobNotFoundError()
     return job
+
+
+def latest_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    return db.scalars(select(Job).where(Job.project_id == project_id).order_by(Job.created_at.desc())).first()
 
 
 def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
@@ -185,6 +195,17 @@ def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
         else:
             db.commit()
     return failed
+
+
+def _require_no_active_transcription(db: Session, project_id: uuid.UUID) -> None:
+    active = select(Job.id).where(
+        Job.project_id == project_id,
+        Job.job_type == JobTypeEnum.TRANSCRIPTION,
+        Job.status.in_(JOB_ACTIVE_STATUSES),
+    )
+    if db.scalar(active.limit(1)) is not None:
+        db.rollback()
+        raise TranscriptionAlreadyRunningError(ERROR_INGESTION_DURING_TRANSCRIPTION.format(project_id=project_id))
 
 
 def _has_stalled(job: Job) -> bool:

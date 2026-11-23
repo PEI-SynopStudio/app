@@ -16,7 +16,7 @@ from app.services.workflow.jobs import (
     queue_job,
 )
 from app.services.workflow.submission import submit_transcription
-from test_submission import BrokenDispatcher, dispatcher, finished_asset, make_project, storage, submit_url  # noqa: F401
+from test_submission import BrokenDispatcher, count, dispatcher, finished_asset, make_project, storage, submit_url  # noqa: F401
 
 
 def new_transcription(db, project_id, asset_id):
@@ -114,3 +114,23 @@ def test_latest_transcription_ignores_other_job_types(db, storage, dispatcher):
     submit_url(db, dispatcher, project_id)
 
     assert latest_transcription_job(db, uuid.UUID(project_id)).id == job.id
+
+
+def test_a_new_video_is_refused_while_the_current_one_is_transcribed(db, storage, dispatcher):
+    project_id = make_project(db)
+    asset, _ = finished_asset(db, storage, project_id)
+    submit_transcription(db, dispatcher, asset)
+
+    with pytest.raises(TranscriptionAlreadyRunningError, match="being transcribed"):
+        submit_url(db, dispatcher, project_id)
+
+    assert count(db, MediaAsset) == 1
+    assert db.get(MediaAsset, asset.id) is not None
+
+
+def test_a_new_video_is_accepted_once_the_transcription_ended(db, storage, dispatcher):
+    project_id = make_project(db)
+    asset, _ = finished_asset(db, storage, project_id)
+    fail_job(db, submit_transcription(db, dispatcher, asset), JobErrorCodeEnum.MODEL_UNAVAILABLE, "no weights")
+
+    assert submit_url(db, dispatcher, project_id).status == JobStatusEnum.QUEUED
