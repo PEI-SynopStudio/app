@@ -12,9 +12,11 @@ from app.core.config import (
     AUDIT_DETAIL_JOB_ID,
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
+    ERROR_TRANSCRIPTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
     ERROR_JOB_STALLED,
     JOB_ACTIVE_INGESTION_INDEX,
+    JOB_ACTIVE_TRANSCRIPTION_INDEX,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
     ApplyOutcome,
@@ -28,7 +30,7 @@ from app.core.config import (
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
 from app.database.models import Job
-from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema
+from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema, TranscriptionParams
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.workflow.ingestion_results import record_ingestion_outcome
@@ -38,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 
 class IngestionAlreadyRunningError(Exception):
+    pass
+
+
+class TranscriptionAlreadyRunningError(Exception):
     pass
 
 
@@ -78,6 +84,31 @@ def create_ingestion_job(
     return job
 
 
+def create_transcription_job(
+    db: Session, project_id: str, params: TranscriptionParams, media_asset_id: uuid.UUID
+) -> Job:
+    project = require_ingestion_allowed(db, project_id)
+    job = Job(
+        project_id=project.id,
+        media_asset_id=media_asset_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        parameters=params.model_dump(mode=JSON_DUMP_MODE),
+    )
+    db.add(job)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if exc.orig.diag.constraint_name == JOB_ACTIVE_TRANSCRIPTION_INDEX:
+            raise TranscriptionAlreadyRunningError(
+                ERROR_TRANSCRIPTION_ALREADY_RUNNING.format(project_id=project_id)
+            ) from exc
+        raise
+    record_audit(db, project.id, AuditAction.TRANSCRIPTION_REQUESTED, {AUDIT_DETAIL_JOB_ID: str(job.id)})
+    db.commit()
+    return job
+
+
 def get_job(db: Session, project_id: str, job_id: str) -> Job:
     try:
         job = db.get(Job, uuid.UUID(job_id))
@@ -92,6 +123,15 @@ def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
     query = (
         select(Job)
         .where(Job.project_id == project_id, Job.job_type == JobTypeEnum.INGESTION)
+        .order_by(Job.created_at.desc())
+    )
+    return db.scalars(query).first()
+
+
+def latest_transcription_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id, Job.job_type == JobTypeEnum.TRANSCRIPTION)
         .order_by(Job.created_at.desc())
     )
     return db.scalars(query).first()

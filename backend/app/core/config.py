@@ -143,6 +143,7 @@ LOG_UPLOAD_DISCARD_FAILED = "Could not discard the rejected upload of project %s
 # --- Job dispatch and events ---
 MEDIA_INGESTED_EVENT = "media.ingested"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
+ERROR_TRANSCRIPTION_ALREADY_RUNNING = "A transcription is already running for project {project_id}."
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
