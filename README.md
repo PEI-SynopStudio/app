@@ -4,6 +4,9 @@ Arranque local:
 
 ```bash
 docker compose up --build
+
+# BD
+docker compose up -d postgres
 ```
 
 Apagar:
@@ -20,7 +23,7 @@ python3 -m venv .venv
 
 source .venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 python -m pytest -v
 

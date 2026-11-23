@@ -13,6 +13,8 @@ from app.core.config import (
     JobTypeEnum,
     LicenseType,
 )
+from app.core.config import JobStatusEnum, JobTypeEnum, LicenseType, JobStepProcessingEnum
+from app.database.models import Job
 from app.database.session import get_session_factory
 from app.main import app
 from app.schemas.job import IngestionParams, JobStatusResponseSchema
@@ -168,3 +170,36 @@ def test_publishing_without_watchers_does_nothing(hub):
     hub.publish(update_for(uuid.uuid4()))
 
     assert hub._watchers == {}
+
+
+def test_a_new_connection_receives_the_latest_job_of_any_type(client, db):
+    project_id = make_project(db)
+    job = Job(
+        project_id=project_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.PROCESSING,
+        step=JobStepProcessingEnum.TRANSCRIBING,
+        step_progress=40.0,
+        progress=29.0,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(job)
+    db.commit()
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        state = websocket.receive_json()
+
+    assert state["job_id"] == str(job.id)
+    assert state["job_type"] == "transcription"
+    assert state["step"] == "transcribing"
+    assert state["message"] == "Transcribing the speech"
+
+
+def test_a_project_without_jobs_sends_no_initial_state(client, db, hub):
+    project_id = make_project(db)
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        publish(client, hub, update_for(project_id, 25.0))
+        first = websocket.receive_json()
+
+    assert first["progress"] == 25.0

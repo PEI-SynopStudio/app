@@ -37,6 +37,8 @@ def queues(monkeypatch):
         "JOBS_QUEUE_FORMAT": f"{prefix}-jobs.{{job_type}}",
         "JOB_EVENTS_EXCHANGE": f"{prefix}-events",
         "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
+        "DEAD_LETTER_EXCHANGE": f"{prefix}-dlx",
+        "DEAD_LETTER_QUEUE": f"{prefix}-dlq",
     }
     for constant, value in names.items():
         monkeypatch.setattr(rabbitmq_module, constant, value)
@@ -49,8 +51,10 @@ def queues(monkeypatch):
             channel = await connection.channel()
             await channel.queue_delete(jobs_queue)
             await channel.queue_delete(names["JOB_EVENTS_QUEUE"])
+            await channel.queue_delete(names["DEAD_LETTER_QUEUE"])
             await channel.exchange_delete(names["JOBS_EXCHANGE"])
             await channel.exchange_delete(names["JOB_EVENTS_EXCHANGE"])
+            await channel.exchange_delete(names["DEAD_LETTER_EXCHANGE"])
 
     asyncio.run(remove())
 
@@ -160,6 +164,7 @@ def test_invalid_message_is_discarded(queues, storage, caplog):
 
     assert read_all(jobs_queue) == []
     assert read_all(events_queue) == []
+    assert read_all(rabbitmq_module.DEAD_LETTER_QUEUE) == [b"not a job"]
     assert "Invalid job message" in caplog.text
 
 

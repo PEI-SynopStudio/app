@@ -6,9 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import (
     DOWNLOAD_FILE,
-    ERROR_JOB_DISPATCH_FAILED,
     ERROR_STORAGE_UNAVAILABLE,
-    LOG_JOB_DISPATCH_FAILED,
     REPLACEABLE_ASSET_STATUSES,
     JobErrorCodeEnum,
     MediaAssetStatus,
@@ -22,7 +20,7 @@ from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.uploads import close_upload, source_key
 from app.services.workflow.dispatcher import JobDispatcher
-from app.services.workflow.jobs import create_ingestion_job, fail_job, queue_job
+from app.services.workflow.jobs import create_ingestion_job, fail_job, dispatch_job
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +53,7 @@ def submit_url_ingestion(
     params = IngestionParams(source_url=url, time_start=time_start, time_end=time_end)
     job = create_ingestion_job(db, project_id, params, url, media_asset_id=asset.id, actor=actor)
     _replace_previous_assets(db, storage, object_storage, job)
-    return _queue_and_dispatch(
+    return dispatch_job(
         db, dispatcher, job, JobRequestMessage(job_id=job.id, project_id=project.id, parameters=params)
     )
 
@@ -90,7 +88,7 @@ def submit_upload_ingestion(
         staged_file=session.staged_file,
         file_name=session.file_name,
     )
-    _queue_and_dispatch(db, dispatcher, job, request)
+    dispatch_job(db, dispatcher, job, request)
     close_upload(db, session)
     return job
 
@@ -128,18 +126,6 @@ def _asset_keys(asset: MediaAsset) -> List[str]:
     if asset.audio_track is not None:
         candidates += [asset.audio_track.storage_key, asset.audio_track.waveform_key]
     return [key for key in candidates if key is not None]
-
-
-def _queue_and_dispatch(db: Session, dispatcher: JobDispatcher, job: Job, request: JobRequestMessage) -> Job:
-    """Queued is committed first, so a worker event never finds the job still pending."""
-    queue_job(db, job)
-    try:
-        dispatcher.dispatch(request)
-    except Exception:
-        logger.exception(LOG_JOB_DISPATCH_FAILED, job.id)
-        fail_job(db, job, JobErrorCodeEnum.INTERNAL_ERROR, ERROR_JOB_DISPATCH_FAILED)
-        raise
-    return job
 
 
 def _seconds(timecode: Optional[str]) -> Optional[float]:

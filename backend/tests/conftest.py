@@ -183,3 +183,54 @@ def sign_in(client, session_factory, user):
     with session_factory() as session:
         client.cookies.set(SESSION_COOKIE_NAME, create_session(session, user).token)
     return client
+
+
+@pytest.fixture
+def queues(monkeypatch):
+    """Exchanges and queues of this test only, removed at the end; skipped without a broker."""
+    import asyncio
+    import uuid
+
+    import aio_pika
+
+    from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
+    from test_rabbitmq import TEST_RABBITMQ_URL, broker_is_running
+
+    if not broker_is_running():
+        pytest.skip("RabbitMQ is not available; run 'docker compose up -d rabbitmq' first")
+    prefix = f"test-{uuid.uuid4().hex}"
+    names = {
+        "JOBS_EXCHANGE": f"{prefix}-jobs",
+        "JOBS_QUEUE_FORMAT": f"{prefix}-jobs.{{job_type}}",
+        "JOB_EVENTS_EXCHANGE": f"{prefix}-events",
+        "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
+        "DEAD_LETTER_EXCHANGE": f"{prefix}-dlx",
+        "DEAD_LETTER_QUEUE": f"{prefix}-dlq",
+        "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
+        "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
+    }
+    for constant, value in names.items():
+        monkeypatch.setattr(rabbitmq_module, constant, value)
+    monkeypatch.setattr(event_consumer, "EVENT_CONSUMER_RETRY_SECONDS", 0.05)
+    yield names
+
+    async def remove():
+        connection = await aio_pika.connect(TEST_RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            for queue in (
+                names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"),
+                names["JOB_EVENTS_QUEUE"],
+                names["MEDIA_INGESTED_QUEUE"],
+                names["DEAD_LETTER_QUEUE"],
+            ):
+                await channel.queue_delete(queue)
+            for exchange in (
+                names["JOBS_EXCHANGE"],
+                names["JOB_EVENTS_EXCHANGE"],
+                names["MEDIA_EVENTS_EXCHANGE"],
+                names["DEAD_LETTER_EXCHANGE"],
+            ):
+                await channel.exchange_delete(exchange)
+
+    asyncio.run(remove())

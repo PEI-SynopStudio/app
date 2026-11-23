@@ -13,6 +13,7 @@ from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
 from conftest import sign_in
+from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -69,3 +70,66 @@ def test_restarting_the_api_leaves_the_jobs_alone(session_factory, db, monkeypat
 
     db.expire_all()
     assert db.get(Job, job.id).status == JobStatusEnum.QUEUED
+    
+
+def test_job_can_be_cancelled_and_notifies_watchers(client, db):
+    hub = JobProgressHub()
+    app.dependency_overrides[get_progress_hub] = lambda: hub
+    job = queued_job(db)
+    with hub.watch(job.project_id) as updates:
+        response = client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel")
+        update = updates.get_nowait()
+        
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert (update.job_id, update.status) == (job.id, JobStatusEnum.CANCELLED)
+
+
+def test_cancelling_finished_job_conflicterror(client, db):
+    job = queued_job(db)
+    assert client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel").status_code == 200
+    
+    second = client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel")
+    assert second.status_code == 409
+
+
+def test_cancelling_unknown_job_notfounderror(client, db):
+    job = queued_job(db)
+    assert client.post(f"/projects/{job.project_id}/jobs/{uuid.uuid4()}/cancel").status_code == 404
+
+
+def test_cancelling_with_invalid_jobid_rejectederror(client, db):
+    job = queued_job(db)
+    assert client.post(f"/projects/{job.project_id}/jobs/not-a-uuid/cancel").status_code == 422
+
+def test_project_jobs_are_listed_newest_first(client, db):
+    first = queued_job(db)
+    client.post(f"/projects/{first.project_id}/jobs/{first.id}/cancel")
+    second = queue_job(
+        db, create_ingestion_job(db, str(first.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
+    )
+
+    response = client.get(f"/projects/{first.project_id}/jobs")
+    assert response.status_code == 200
+    assert [job["job_id"] for job in response.json()] == [str(second.id), str(first.id)]
+    
+def test_listing_jobs_of_unknown_project_is_not_found(client):
+    assert client.get(f"/projects/{uuid.uuid4()}/jobs").status_code == 404
+    
+def test_listing_jobs_of_project_without_jobs_returns_empty_list(client, db):
+    project = create_project(db, ProjectCreate(
+        title="Empty",
+        author="University of Aveiro",
+        speakers=["Ana"],
+        recording_date=date(2026, 10, 1),
+        license_type=LicenseType.CREATIVE_COMMONS,
+        copyright_notice="CC BY 4.0",
+        licence_confirmed=True,
+        authorship_confirmed=True,
+    ))
+    response = client.get(f"/projects/{project.id}/jobs")
+    assert response.status_code == 200
+    assert response.json() == []
+    
+def test_listing_jobs_with_invalid_project_id_is_rejected(client):
+    assert client.get("/projects/not-a-uuid/jobs").status_code == 422

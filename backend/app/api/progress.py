@@ -9,7 +9,7 @@ from app.api.dependencies import owns
 from app.api.errors import SERVICE_ERRORS
 from app.core.config import (
     ASGI_WEBSOCKET_DISCONNECT,
-    INGESTION_ROUTE_TAG,
+    JOBS_ROUTE_TAG,
     PROGRESS_WS_ROUTE,
     ERROR_PROJECT_NOT_FOUND,
     PROJECTS_ROUTE_PREFIX,
@@ -21,10 +21,10 @@ from app.database.session import get_session_factory
 from app.schemas.job import JobStatusResponseSchema
 from app.services.auth.auth import resolve_session
 from app.services.projects.projects import ProjectNotFoundError, get_project
-from app.services.workflow.jobs import latest_ingestion_job
+from app.services.workflow.jobs import latest_ingestion_job, latest_project_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
-router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[INGESTION_ROUTE_TAG])
+router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 
 
 class NotAuthenticatedError(Exception):
@@ -73,6 +73,7 @@ def _latest_state(
         if not owns(session.user, project):
             raise ProjectNotFoundError(ERROR_PROJECT_NOT_FOUND.format(project_id=project_id))
         job = latest_ingestion_job(db, project.id)
+        job = latest_project_job(db, get_project(db, project_id).id)
         return JobStatusResponseSchema.model_validate(job) if job is not None else None
 
 

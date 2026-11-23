@@ -5,13 +5,9 @@ from app.core.config import (
     ERROR_CODE_INVALID_STEP,
     ERROR_CODE_INVALID_TRANSITION,
     ERROR_CODE_JOB_NOT_FOUND,
-    ERROR_CODE_JOB_TERMINAL,
-    ERROR_CODE_STALE_ATTEMPT,
     ERROR_INVALID_STEP,
     ERROR_INVALID_TRANSITION,
-    ERROR_JOB_ALREADY_TERMINAL,
     ERROR_JOB_NOT_FOUND,
-    ERROR_STALE_JOB_ATTEMPT,
     JobErrorCodeEnum,
 )
 
@@ -48,20 +44,6 @@ class InvalidStateTransitionError(ConflictError):
             message=ERROR_INVALID_TRANSITION.format(current=current, target=target),
             code=ERROR_CODE_INVALID_TRANSITION,
         )
-
-
-class JobAlreadyTerminalError(ConflictError):
-    def __init__(self, status: str) -> None:
-        super().__init__(message=ERROR_JOB_ALREADY_TERMINAL.format(status=status), code=ERROR_CODE_JOB_TERMINAL)
-
-
-class StaleJobAttemptError(ConflictError):
-    def __init__(self, event_attempt: int, current_attempt: int) -> None:
-        super().__init__(
-            message=ERROR_STALE_JOB_ATTEMPT.format(event_attempt=event_attempt, current_attempt=current_attempt),
-            code=ERROR_CODE_STALE_ATTEMPT,
-        )
-
 
 class InvalidStepError(DomainValidationError):
     def __init__(self, job_type: str, step: str) -> None:

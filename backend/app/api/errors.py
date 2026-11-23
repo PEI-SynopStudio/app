@@ -4,7 +4,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.core.config import ERROR_STORAGE_UNAVAILABLE, LOG_STORAGE_UNAVAILABLE
-from app.core.exceptions import JobDispatchError, JobNotFoundError
+from app.core.exceptions import JobDispatchError, JobNotFoundError, ConflictError, DomainValidationError
 from app.services.projects.projects import LicenceNotConfirmedError, ProjectBusyError, ProjectNotFoundError
 from app.services.storage.object_storage import ObjectStorageError
 from app.services.video.playback import MediaNotReadyError
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 # Service exceptions the API turns into HTTP errors; anything else stays a 500.
 SERVICE_ERRORS = (
     ValueError,
+    DomainValidationError,
+    ConflictError,
     ProjectNotFoundError,
     LicenceNotConfirmedError,
     ProjectBusyError,
@@ -34,7 +36,7 @@ def http_error(exc: Exception) -> HTTPException:
         code = status.HTTP_404_NOT_FOUND
     elif isinstance(exc, LicenceNotConfirmedError):
         code = status.HTTP_403_FORBIDDEN
-    elif isinstance(exc, (IngestionAlreadyRunningError, UploadIncompleteError, ProjectBusyError)):
+    elif isinstance(exc, (IngestionAlreadyRunningError, UploadIncompleteError, ProjectBusyError, ConflictError)):
         code = status.HTTP_409_CONFLICT
     elif isinstance(exc, JobDispatchError):
         code = status.HTTP_503_SERVICE_UNAVAILABLE
