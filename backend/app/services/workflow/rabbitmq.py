@@ -18,6 +18,8 @@ from app.core.config import (
     MEDIA_EVENTS_EXCHANGE,
     MEDIA_INGESTED_EVENT,
     MEDIA_INGESTED_QUEUE,
+    TRANSCRIPT_READY_EVENT,
+    TRANSCRIPT_READY_QUEUE,
     get_settings,
 )
 from app.core.exceptions import JobDispatchError
@@ -42,10 +44,10 @@ async def declare_event_queue(channel: AbstractChannel) -> Tuple[AbstractExchang
 
 
 async def declare_media_events_exchange(channel: AbstractChannel) -> AbstractExchange:
-    """The queue keeps media.ingested until the transcription worker exists and reads it (FR04, FR05)."""
     exchange = await channel.declare_exchange(MEDIA_EVENTS_EXCHANGE, aio_pika.ExchangeType.DIRECT, durable=True)
-    queue = await channel.declare_queue(MEDIA_INGESTED_QUEUE, durable=True)
-    await queue.bind(exchange, MEDIA_INGESTED_EVENT)
+    for queue_name, routing_key in ((MEDIA_INGESTED_QUEUE, MEDIA_INGESTED_EVENT), (TRANSCRIPT_READY_QUEUE, TRANSCRIPT_READY_EVENT)):
+        queue = await channel.declare_queue(queue_name, durable=True)
+        await queue.bind(exchange, routing_key)
     return exchange
 
 

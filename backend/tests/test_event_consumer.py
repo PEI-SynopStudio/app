@@ -7,10 +7,11 @@ from datetime import date
 
 import aio_pika
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, LicenseType, MediaAssetStatus, SourceType
-from app.database.models import Job, MediaAsset
+from app.database.models import Job, MediaAsset, Transcript
 from app.schemas.job import IngestionParams, JobRequestMessage, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
@@ -24,6 +25,8 @@ from in_memory_object_storage import InMemoryObjectStorage
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
 from app.workers.ingestion_worker import IngestionWorker
 from test_rabbitmq import TEST_RABBITMQ_URL, UNREACHABLE_URL, broker_is_running
+from test_submission import storage  # noqa: F401
+from test_transcription_results import completed, transcription  # noqa: F401
 
 WAIT_SECONDS = 20
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -42,6 +45,7 @@ def queues(monkeypatch):
         "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
         "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
         "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
+        "TRANSCRIPT_READY_QUEUE": f"{prefix}-transcript.ready",
     }
     for constant, value in names.items():
         monkeypatch.setattr(rabbitmq_module, constant, value)
@@ -52,7 +56,12 @@ def queues(monkeypatch):
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
             channel = await connection.channel()
-            for queue in (names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"), names["JOB_EVENTS_QUEUE"], names["MEDIA_INGESTED_QUEUE"]):
+            for queue in (
+                names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"),
+                names["JOB_EVENTS_QUEUE"],
+                names["MEDIA_INGESTED_QUEUE"],
+                names["TRANSCRIPT_READY_QUEUE"],
+            ):
                 await channel.queue_delete(queue)
             for exchange in (names["JOBS_EXCHANGE"], names["JOB_EVENTS_EXCHANGE"], names["MEDIA_EVENTS_EXCHANGE"]):
                 await channel.exchange_delete(exchange)
@@ -86,14 +95,14 @@ def progress_event(job_id, percent=50.0):
     )
 
 
-def consume(session_factory, bodies, done, hub=None):
+def consume(session_factory, bodies, done, hub=None, open_object_storage=None):
     """Publish the raw event bodies, run the consumer until `done()` holds and return the media.ingested bodies."""
 
     async def run():
         connection = await aio_pika.connect(TEST_RABBITMQ_URL)
         async with connection:
             channel = await connection.channel()
-            consumer = JobEventConsumer(TEST_RABBITMQ_URL, session_factory, hub or JobProgressHub())
+            consumer = JobEventConsumer(TEST_RABBITMQ_URL, session_factory, hub or JobProgressHub(), open_object_storage)
             await consumer.open(channel)
             sender = await connection.channel()
             exchange, _ = await rabbitmq_module.declare_event_queue(sender)
@@ -161,6 +170,27 @@ def test_worker_events_reach_the_database_and_announce_the_ingestion(queues, ses
     assert [event["event"] for event in announced] == ["media.ingested"]
     assert (announced[0]["job_id"], announced[0]["project_id"]) == (str(job_id), str(project_id))
     assert announced[0]["proxy_path"] == "proxy/proxy.mp4"
+
+
+def test_a_finished_transcription_announces_its_transcript(queues, session_factory, transcription):
+    job, object_storage = transcription
+    job_id, asset_id = job.id, job.media_asset_id
+
+    consume(
+        session_factory,
+        [completed(job).model_dump_json().encode()],
+        status_is(session_factory, job_id, JobStatusEnum.COMPLETED),
+        open_object_storage=lambda: object_storage,
+    )
+
+    with session_factory() as db:
+        transcript_id = db.scalar(select(Transcript.id))
+    announced = read_media_ingested(queues["TRANSCRIPT_READY_QUEUE"])
+    assert [event["event"] for event in announced] == ["transcript.ready"]
+    assert (announced[0]["job_id"], announced[0]["media_asset_id"], announced[0]["transcript_id"]) == (
+        str(job_id), str(asset_id), str(transcript_id)
+    )
+    assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []
 
 
 def test_progress_event_updates_the_job(queues, session_factory, job):

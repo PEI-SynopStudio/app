@@ -124,7 +124,11 @@ def media_queue(monkeypatch):
     if not broker_is_running():
         pytest.skip("RabbitMQ is not available; run 'docker compose up -d rabbitmq' first")
     prefix = f"test-{uuid.uuid4().hex}"
-    names = {"MEDIA_EVENTS_EXCHANGE": f"{prefix}-media", "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested"}
+    names = {
+        "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
+        "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
+        "TRANSCRIPT_READY_QUEUE": f"{prefix}-transcript.ready",
+    }
     for constant, value in names.items():
         monkeypatch.setattr(rabbitmq_module, constant, value)
     monkeypatch.setattr(transcription_trigger, "EVENT_CONSUMER_RETRY_SECONDS", 0.05)
@@ -135,6 +139,7 @@ def media_queue(monkeypatch):
         async with connection:
             channel = await connection.channel()
             await channel.queue_delete(names["MEDIA_INGESTED_QUEUE"])
+            await channel.queue_delete(names["TRANSCRIPT_READY_QUEUE"])
             await channel.exchange_delete(names["MEDIA_EVENTS_EXCHANGE"])
 
     asyncio.run(remove())
