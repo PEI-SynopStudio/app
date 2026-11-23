@@ -49,6 +49,11 @@ async def declare_media_events_exchange(channel: AbstractChannel) -> AbstractExc
     return exchange
 
 
+async def declare_media_ingested_queue(channel: AbstractChannel) -> AbstractQueue:
+    await declare_media_events_exchange(channel)
+    return await channel.declare_queue(MEDIA_INGESTED_QUEUE, durable=True)
+
+
 # Publish each job to the durable jobs exchange, with its type as the routing key.
 # Source: architecture §2 (job queue between backend and workers); MS2 FR02 – Outputs (asynchronous ingestion).
 class RabbitMQDispatcher(JobDispatcher):
