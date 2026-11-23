@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
@@ -36,6 +36,19 @@ class LoginRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     current_password: AnyPassword
     new_password: NewPassword
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Only the fields sent are changed (GDPR Art. 16, rectification)."""
+
+    name: Optional[UserName] = None
+    email: Optional[EmailStr] = None
+    # Required to change the email, which is what the account signs in with.
+    current_password: Optional[AnyPassword] = None
+
+
+class AccountDeleteRequest(BaseModel):
+    password: AnyPassword
 
 
 class UserResponse(BaseModel):

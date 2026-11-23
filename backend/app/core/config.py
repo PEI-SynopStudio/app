@@ -89,6 +89,7 @@ ERROR_NOT_AUTHENTICATED = "Sign in to continue."
 ERROR_INVALID_CREDENTIALS = "The email or password is incorrect."
 ERROR_EMAIL_TAKEN = "An account with this email already exists."
 ERROR_WRONG_PASSWORD = "The current password is incorrect."
+ERROR_ACCOUNT_BUSY = "The account cannot be deleted while an ingestion is running in one of its projects."
 
 # --- Project documents ---
 JSON_DUMP_MODE = "json"

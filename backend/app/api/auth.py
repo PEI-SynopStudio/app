@@ -22,7 +22,14 @@ from app.core.config import (
 )
 from app.database.models import User
 from app.database.session import get_db
-from app.schemas.auth import LoginRequest, PasswordChangeRequest, RegisterRequest, UserResponse
+from app.schemas.auth import (
+    AccountDeleteRequest,
+    LoginRequest,
+    PasswordChangeRequest,
+    ProfileUpdateRequest,
+    RegisterRequest,
+    UserResponse,
+)
 from app.services.auth.auth import (
     EmailTakenError,
     InvalidCredentialsError,
@@ -34,6 +41,10 @@ from app.services.auth.auth import (
     revoke_session,
     revoke_user_sessions,
 )
+from app.services.projects.projects import ProjectBusyError
+from app.services.storage.local import LocalStorage, get_storage
+from app.services.storage.object_storage import ObjectStorage, get_object_storage
+from app.services.users.accounts import AccountBusyError, delete_account, update_profile
 
 router = APIRouter(prefix=AUTH_ROUTE_PREFIX, tags=[AUTH_ROUTE_TAG])
 
@@ -87,6 +98,39 @@ def logout_everywhere(
 @router.get(ME_ROUTE, response_model=UserResponse)
 def me(user: User = Depends(get_current_user)):
     return user
+
+
+# Correct the account's name or email; a new email needs the current password.
+# Source: GDPR Art. 16 (rectification); MS3 §1.1.2.
+@router.patch(ME_ROUTE, response_model=UserResponse)
+def update_me(body: ProfileUpdateRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        return update_profile(db, user, body.name, body.email, body.current_password)
+    except WrongPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except EmailTakenError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+# Delete the account and all its projects, then end this browser's session; the audit records are kept.
+# Source: MS3 §1.1.2, §1.4.3; GDPR Art. 17.
+@router.delete(ME_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
+def delete_me(
+    body: AccountDeleteRequest,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: LocalStorage = Depends(get_storage),
+    object_storage: ObjectStorage = Depends(get_object_storage),
+):
+    """A storage failure answers 503 (app-wide handler); the account stays and the request can be repeated."""
+    try:
+        delete_account(db, storage, object_storage, user, body.password)
+    except WrongPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except (AccountBusyError, ProjectBusyError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    clear_session_cookie(response)
 
 
 # Change the password; every other session of the account is signed out.
