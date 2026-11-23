@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage
@@ -27,6 +27,7 @@ from app.core.config import (
 from app.core.exceptions import JobNotFoundError
 from app.database.models import Job
 from app.schemas.job import JobStatusResponseSchema, JobUpdateEventSchema
+from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.metadata import IngestionOutput
 from app.services.workflow.jobs import apply_job_event
 from app.services.workflow.progress_hub import JobProgressHub
@@ -51,10 +52,17 @@ class MediaIngestedEvent(BaseModel):
 class JobEventConsumer:
     """Runs inside the API process; prefetch 1 applies the events strictly in the order they were published."""
 
-    def __init__(self, url: str, session_factory: sessionmaker[Session], hub: JobProgressHub) -> None:
+    def __init__(
+        self,
+        url: str,
+        session_factory: sessionmaker[Session],
+        hub: JobProgressHub,
+        open_object_storage: Optional[Callable[[], ObjectStorage]] = None,
+    ) -> None:
         self._url = url
         self._session_factory = session_factory
         self._hub = hub
+        self._open_object_storage = open_object_storage
 
     async def run(self) -> None:
         """Runs until cancelled, connecting again whenever the connection is lost.
@@ -98,7 +106,7 @@ class JobEventConsumer:
             # The project was deleted while its job was running.
             logger.warning(LOG_EVENT_UNKNOWN_JOB, event.job_id)
             await message.reject(requeue=False)
-        except (SQLAlchemyError, *CONNECTION_EXCEPTIONS) as exc:
+        except (SQLAlchemyError, ObjectStorageError, *CONNECTION_EXCEPTIONS) as exc:
             # Temporary: back in the queue, and the state machine ignores what was already applied.
             logger.warning(LOG_EVENT_CONSUMER_UNAVAILABLE, exc)
             await asyncio.sleep(EVENT_CONSUMER_RETRY_SECONDS)
@@ -118,7 +126,7 @@ class JobEventConsumer:
         A repeated completed event announces again; consumers use the job ID.
         """
         with self._session_factory() as db:
-            result = apply_job_event(db, event)
+            result = apply_job_event(db, event, self._open_object_storage)
             job = db.get(Job, event.job_id)
             update = JobStatusResponseSchema.model_validate(job) if result.outcome == ApplyOutcome.APPLIED else None
             completed = event.status == JobStatusEnum.COMPLETED and result.job.status == JobStatusEnum.COMPLETED

@@ -15,6 +15,7 @@ from app.schemas.job import IngestionParams, JobRequestMessage, JobUpdateEventSc
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
 from app.services.storage.local import LocalStorage
+from app.services.storage.object_storage import ObjectStorageError
 from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
 from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.jobs import create_ingestion_job, queue_job
@@ -213,11 +214,29 @@ def test_event_is_applied_after_a_database_failure(queues, session_factory, job,
     real_apply = event_consumer.apply_job_event
     calls = []
 
-    def fail_once(db, event):
+    def fail_once(db, event, open_object_storage):
         calls.append(event)
         if len(calls) == 1:
             raise OperationalError("SELECT 1", {}, Exception("database restarting"))
-        return real_apply(db, event)
+        return real_apply(db, event, open_object_storage)
+
+    monkeypatch.setattr(event_consumer, "apply_job_event", fail_once)
+
+    consume(session_factory, [progress_event(job_id).model_dump_json().encode()], status_is(session_factory, job_id, JobStatusEnum.PROCESSING))
+
+    assert len(calls) == 2
+
+
+def test_event_is_applied_after_a_storage_failure(queues, session_factory, job, monkeypatch):
+    job_id = job.id
+    real_apply = event_consumer.apply_job_event
+    calls = []
+
+    def fail_once(db, event, open_object_storage):
+        calls.append(event)
+        if len(calls) == 1:
+            raise ObjectStorageError("storage restarting")
+        return real_apply(db, event, open_object_storage)
 
     monkeypatch.setattr(event_consumer, "apply_job_event", fail_once)
 

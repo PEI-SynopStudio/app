@@ -2,7 +2,7 @@ import logging
 import uuid
 from dataclasses import fields
 from datetime import timedelta
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +33,9 @@ from app.database.models import Job
 from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema, TranscriptionParams
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
+from app.services.storage.object_storage import ObjectStorage
 from app.services.workflow.ingestion_results import record_ingestion_outcome
+from app.services.workflow.transcription_results import record_transcription_outcome
 from app.services.workflow.state_machine import ApplyResult, JobSnapshot, apply_event, change_status
 
 logger = logging.getLogger(__name__)
@@ -148,8 +150,13 @@ def fail_job(db: Session, job: Job, error_code: JobErrorCodeEnum, error_message:
 
 # Apply a worker event to the stored job, one event at a time per job.
 # Source: architecture §2 (workers publish results, the backend persists them); T3.13 job state machine.
-def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
-    """The row lock makes concurrent events of the same job wait for each other."""
+def apply_job_event(
+    db: Session, event: JobUpdateEventSchema, open_object_storage: Optional[Callable[[], ObjectStorage]] = None
+) -> ApplyResult:
+    """The row lock makes concurrent events of the same job wait for each other.
+
+    open_object_storage is required for the events of transcription jobs, whose transcript is read from storage.
+    """
     job = db.get(Job, event.job_id, with_for_update=True)
     if job is None:
         raise JobNotFoundError()
@@ -158,6 +165,7 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
     if result.outcome == ApplyOutcome.APPLIED:
         _store(job, result.job)
         record_ingestion_outcome(db, job)
+        record_transcription_outcome(db, job, open_object_storage)
     elif result.outcome == ApplyOutcome.REJECTED:
         logger.warning(LOG_JOB_EVENT_REJECTED, event.job_id, result.reason)
     db.commit()
@@ -195,6 +203,7 @@ def _change_status(
 ) -> Job:
     _store(job, change_status(_snapshot(job), target, utc_now(), error_code, error_message))
     record_ingestion_outcome(db, job)
+    record_transcription_outcome(db, job)
     db.commit()
     return job
 

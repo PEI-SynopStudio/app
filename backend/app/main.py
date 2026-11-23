@@ -28,7 +28,9 @@ def _configure_logging() -> None:
 async def _lifespan(_: FastAPI):
     hub = get_progress_hub()
     tasks = [
-        asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub).run()),
+        asyncio.create_task(
+            JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub, get_object_storage).run()
+        ),
         asyncio.create_task(run_periodic_sweep(get_session_factory(), get_object_storage, hub)),
     ]
     yield

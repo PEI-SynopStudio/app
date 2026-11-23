@@ -607,6 +607,11 @@ AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
 AUDIT_DETAIL_JOB_ID = "job_id"
 AUDIT_DETAIL_SOURCE = "source"
 AUDIT_DETAIL_ERROR_CODE = "error_code"
+AUDIT_TRANSCRIPTION_FIELDS = {"language", "model_name", "model_revision", "alignment_model_name", "alignment_model_revision", "word_count"}
+ERROR_TRANSCRIPT_COUNT_MISMATCH = (
+    "The stored transcript holds {segments} segment(s) and {words} word(s), "
+    "but the worker reported {expected_segments} and {expected_words}."
+)
 # Fields of a finished ingestion that are copied to its media asset (FR02 step 6).
 ASSET_METADATA_FIELDS = (
     "container",
