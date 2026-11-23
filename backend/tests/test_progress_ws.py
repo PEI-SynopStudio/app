@@ -6,15 +6,22 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.core.config import JobStatusEnum, JobTypeEnum, LicenseType
+from app.core.config import (
+    WS_CLOSE_NOT_AUTHENTICATED,
+    WS_CLOSE_PROJECT_NOT_FOUND,
+    JobStatusEnum,
+    JobTypeEnum,
+    LicenseType,
+)
 from app.database.session import get_session_factory
 from app.main import app
 from app.schemas.job import IngestionParams, JobStatusResponseSchema
 from app.schemas.project import ProjectCreate
+from app.services.auth.auth import create_user
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
-from conftest import sign_in
+from conftest import TEST_PASSWORD, sign_in
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -112,6 +119,26 @@ def test_unknown_project_is_closed_with_a_clear_code(client, project_id):
             websocket.receive_json()
 
     assert closed.value.code == 4404
+
+
+def closing_code(client, project_id):
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+    return closed.value.code
+
+
+def test_progress_needs_a_signed_in_user(client, db, user):
+    project_id = make_project(db, user)
+    client.cookies.clear()
+
+    assert closing_code(client, project_id) == WS_CLOSE_NOT_AUTHENTICATED
+
+
+def test_progress_of_someone_elses_project_is_not_found(client, db):
+    other = create_user(db, "other@example.com", "Other", TEST_PASSWORD)
+
+    assert closing_code(client, make_project(db, other)) == WS_CLOSE_PROJECT_NOT_FOUND
 
 
 def test_disconnecting_removes_the_watcher(client, db, hub, user):
