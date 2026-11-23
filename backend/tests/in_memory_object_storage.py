@@ -12,6 +12,9 @@ class InMemoryObjectStorage(ObjectStorage):
     def put_file(self, project_id, key, path):
         self.objects[(project_id, key)] = path.read_bytes()
 
+    def put_stream(self, project_id, key, data):
+        self.objects[(project_id, key)] = data.read()
+
     def delete(self, project_id, key):
         self.objects.pop((project_id, key), None)
 
@@ -48,6 +51,9 @@ class InMemoryObjectStorage(ObjectStorage):
 
 class UnavailableObjectStorage(ObjectStorage):
     def put_file(self, project_id, key, path):
+        raise ObjectStorageError("storage down")
+
+    def put_stream(self, project_id, key, data):
         raise ObjectStorageError("storage down")
 
     def delete(self, project_id, key):

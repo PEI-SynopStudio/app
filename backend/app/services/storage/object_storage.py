@@ -55,6 +55,10 @@ class ObjectStorage(ABC):
         """Store a local file, replacing any object with the same key."""
 
     @abstractmethod
+    def put_stream(self, project_id: str, key: str, data: BinaryIO) -> None:
+        """Store the content of an open file, replacing any object with the same key."""
+
+    @abstractmethod
     def delete(self, project_id: str, key: str) -> None:
         """Remove an object of the project if it exists."""
 
@@ -123,6 +127,12 @@ class S3ObjectStorage(ObjectStorage):
         object_key = _project_prefix(project_id) + key
         with _translate_errors(ERROR_S3_PUT_FAILED.format(key=object_key)):
             self._client.upload_file(str(path), self._bucket, object_key)
+
+    def put_stream(self, project_id: str, key: str, data: BinaryIO) -> None:
+        """Like put_file, but from an open file (e.g. a received form file), without copying it to disk first."""
+        object_key = _project_prefix(project_id) + key
+        with _translate_errors(ERROR_S3_PUT_FAILED.format(key=object_key)):
+            self._client.upload_fileobj(data, self._bucket, object_key)
 
     def delete(self, project_id: str, key: str) -> None:
         object_key = _project_prefix(project_id) + key
