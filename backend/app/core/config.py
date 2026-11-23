@@ -31,6 +31,12 @@ DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
 DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
 DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS = 6 * 3600
 
+
+# Supporting documents (FR03): the formats the requirement names, and the limits of the New Project form.
+DEFAULT_ALLOWED_DOCUMENT_EXTENSIONS = "pdf,pptx,docx,txt"
+DEFAULT_MAX_DOCUMENT_BYTES = 50 * 1024**2
+DEFAULT_MAX_DOCUMENTS_PER_PROJECT = 10
+
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
@@ -90,6 +96,38 @@ PROJECT_TITLE_MAX_LENGTH = 300
 PROJECT_FIELD_MIN_LENGTH = 1
 PROJECT_MIN_SPEAKERS = 1
 
+
+PROJECT_DESCRIPTION_MAX_LENGTH = 2000
+PROJECT_LIST_MIN_LIMIT = 1
+PROJECT_LIST_DEFAULT_LIMIT = 50
+PROJECT_LIST_MAX_LIMIT = 100
+PROJECT_LIST_MIN_OFFSET = 0
+# Fields a PATCH may set to null (description: no prompt; caption_style: no subtitles).
+PROJECT_NULLABLE_FIELDS = ("description", "caption_style")
+ERROR_FIELD_NOT_NULLABLE = "{field} cannot be null."
+
+# --- Clips (FR10, FR11, FR12; US18, US21) ---
+CLIP_TITLE_MIN_LENGTH = 1
+CLIP_TITLE_MAX_LENGTH = 300
+CLIP_MIN_SCENES = 1
+CLIP_MAX_SCENES = 50
+CLIP_SCENE_MIN_START = 0.0
+CLIP_DURATION_DECIMALS = 3
+FIRST_CLIP_POSITION = 1
+# subtitle_language: null = the language spoken in the video.
+CLIP_NULLABLE_FIELDS = ("subtitle_language",)
+ERROR_INVALID_CLIP_ID = "Invalid clip ID: {clip_id!r}"
+ERROR_CLIP_NOT_FOUND = "Clip not found: {clip_id}"
+ERROR_SCENE_ORDER = "Invalid scene: it must end after it starts (start {start} s, end {end} s)."
+
+# --- Supporting documents (FR03, US08) ---
+DOCUMENT_KEY_FORMAT = "documents/{document_id}.{extension}"
+FILE_TYPE_MAX_LENGTH = 16
+ERROR_INVALID_DOCUMENT_ID = "Invalid document ID: {document_id!r}"
+ERROR_DOCUMENT_NOT_FOUND = "Document not found: {document_id}"
+ERROR_DOCUMENT_NAME = "File rejected: the file name must have between {minimum} and {maximum} characters."
+ERROR_DOCUMENT_LIMIT = "File rejected: a project can have at most {limit} supporting documents."
+
 # --- API ---
 APP_TITLE = "PEI API"
 # Only the application's own loggers ("app.*"); uvicorn and the media libraries keep their settings.
@@ -123,6 +161,15 @@ PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
+
+
+CLIPS_ROUTE_TAG = "clips"
+CLIPS_ROUTE = "/{project_id}/clips"
+CLIP_ROUTE = "/{project_id}/clips/{clip_id}"
+
+DOCUMENTS_ROUTE_TAG = "documents"
+DOCUMENTS_ROUTE = "/{project_id}/documents"
+DOCUMENT_ROUTE = "/{project_id}/documents/{document_id}"
 
 
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
@@ -496,6 +543,37 @@ class ProjectStatus(str, Enum):
     INGESTION_FAILED = "ingestion_failed"
 
 
+class AspectRatio(str, Enum):
+    """Frame of the clips (FR09, FR14); the values are the ones the interface shows."""
+    VERTICAL = "9:16"
+    SQUARE = "1:1"
+    PORTRAIT = "4:5"
+    LANDSCAPE = "16:9"
+
+
+class Language(str, Enum):
+    """Languages the AI transcribes from and translates into."""
+    PT_PT = "pt-PT"
+    EN = "en"
+    ES = "es"
+
+
+class CaptionStyle(str, Enum):
+    """Look of the burned-in subtitles (FR17); a project without subtitles has none."""
+    CLASSIC = "classic"
+    BOLD = "bold"
+    BOXED = "boxed"
+    MINIMAL = "minimal"
+
+
+# Defaults of the New Project form.
+DEFAULT_ASPECT_RATIO = AspectRatio.VERTICAL
+DEFAULT_PROJECT_LANGUAGE = Language.PT_PT
+DEFAULT_CAPTION_STYLE = CaptionStyle.CLASSIC
+
+
+
+
 class MediaAssetStatus(str, Enum):
     UPLOADING = "uploading"
     PROCESSING = "processing"
@@ -506,6 +584,8 @@ class MediaAssetStatus(str, Enum):
 TABLE_PROJECTS = "projects"
 TABLE_MEDIA_ASSETS = "media_assets"
 TABLE_AUDIO_TRACKS = "audio_tracks"
+TABLE_CLIPS = "clips"
+TABLE_PROJECT_DOCUMENTS = "project_documents"
 FK_PROJECT_ID = f"{TABLE_PROJECTS}.id"
 FK_MEDIA_ASSET_ID = f"{TABLE_MEDIA_ASSETS}.id"
 DB_ON_DELETE_CASCADE = "CASCADE"
@@ -546,6 +626,12 @@ class AuditAction(str, Enum):
     INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
     PROJECT_DELETED = "project.deleted"
+    PROJECT_UPDATED = "project.updated"
+    DOCUMENT_ADDED = "document.added"
+    DOCUMENT_REMOVED = "document.removed"
+    CLIP_CREATED = "clip.created"
+    CLIP_UPDATED = "clip.updated"
+    CLIP_DELETED = "clip.deleted"
 
 
 # Project fields copied to the audit log, which outlives the project (MS3 §1.4.3).
@@ -556,6 +642,11 @@ AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
 AUDIT_DETAIL_JOB_ID = "job_id"
 AUDIT_DETAIL_SOURCE = "source"
 AUDIT_DETAIL_ERROR_CODE = "error_code"
+AUDIT_DETAIL_CLIP_ID = "clip_id"
+AUDIT_DETAIL_DOCUMENT_ID = "document_id"
+AUDIT_DETAIL_CHANGES = "changes"
+# Clip fields copied to the audit log when a clip is deleted, so its history shows what was removed (US30).
+AUDIT_CLIP_FIELDS = ("title", "scenes")
 # Fields of a finished ingestion that are copied to its media asset (FR02 step 6).
 ASSET_METADATA_FIELDS = (
     "container",
@@ -609,6 +700,9 @@ class Settings:
     database_url: str
     database_echo: bool
     job_queued_stalled_after_seconds: int
+    allowed_document_extensions: Tuple[str, ...]
+    max_document_bytes: int
+    max_documents_per_project: int
 
 
 @lru_cache
@@ -644,4 +738,9 @@ def get_settings() -> Settings:
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
+        allowed_document_extensions=_csv("ALLOWED_DOCUMENT_EXTENSIONS", DEFAULT_ALLOWED_DOCUMENT_EXTENSIONS),
+        max_document_bytes=int(os.environ.get("MAX_DOCUMENT_BYTES", DEFAULT_MAX_DOCUMENT_BYTES)),
+        max_documents_per_project=int(
+            os.environ.get("MAX_DOCUMENTS_PER_PROJECT", DEFAULT_MAX_DOCUMENTS_PER_PROJECT)
+        ),
     )
