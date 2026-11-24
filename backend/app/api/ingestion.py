@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_user, require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     ERROR_INGESTION_NOT_STARTED,
@@ -17,9 +18,9 @@ from app.core.config import (
     URL_MAX_LENGTH,
     JobStatusEnum,
 )
+from app.database.models import Project, User
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
-from app.services.projects.projects import get_project
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import ObjectStorage, get_object_storage
 from app.services.video.metadata import TechnicalMetadata
@@ -46,10 +47,16 @@ class IngestionOverview(BaseModel):
 
 # Accept an authorised link and queue its ingestion; the slow checks (yt-dlp probe) run in the job.
 # Source: MS2 FR02 – Step 1 (link input, URL syntax and domain) and Outputs (asynchronous, no UI blocking).
-@router.post(URL_INGESTION_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
+@router.post(
+    URL_INGESTION_ROUTE,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobStatusResponseSchema,
+    dependencies=[Depends(require_project_access)],
+)
 def ingest_url(
     project_id: str,
     body: UrlIngestionRequest,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     object_storage: ObjectStorage = Depends(get_object_storage),
@@ -60,7 +67,7 @@ def ingest_url(
         # Format and order only; the video duration is known after the probe, inside the job.
         validate_time_range(body.start_time, body.end_time, math.inf)
         return submit_url_ingestion(
-            db, storage, object_storage, dispatcher, project_id, url, body.start_time, body.end_time
+            db, storage, object_storage, dispatcher, project_id, url, body.start_time, body.end_time, actor=user
         )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
@@ -69,12 +76,9 @@ def ingest_url(
 # Return the latest ingestion job (progress or failure details) and, once completed, the technical metadata.
 # Source: MS2 FR02 – Outputs (progress) and Step 3 ('Ingestion Failed' with details).
 @router.get(INGESTION_STATUS_ROUTE, response_model=IngestionOverview)
-def read_ingestion(project_id: str, db: Session = Depends(get_db)):
-    try:
-        project = get_project(db, project_id)
-    except SERVICE_ERRORS as exc:
-        raise http_error(exc) from exc
-
+def read_ingestion(
+    project_id: str, project: Project = Depends(require_project_access), db: Session = Depends(get_db)
+):
     job = latest_ingestion_job(db, project.id)
     if job is None:
         raise HTTPException(
@@ -87,7 +91,7 @@ def read_ingestion(project_id: str, db: Session = Depends(get_db)):
 
 # Return temporary links to the proxy video and the waveform of the finished video.
 # Source: MS3 §1.1.6 (media files served through signed, time-limited URLs).
-@router.get(MEDIA_ROUTE, response_model=MediaLinks)
+@router.get(MEDIA_ROUTE, response_model=MediaLinks, dependencies=[Depends(require_project_access)])
 def read_media_links(
     project_id: str,
     db: Session = Depends(get_db),

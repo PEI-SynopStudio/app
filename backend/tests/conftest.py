@@ -163,6 +163,28 @@ def db_override(session_factory):
     app.dependency_overrides[get_db] = override
 
 
+TEST_PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture
+def user(session_factory):
+    """The account the API clients of the tests are signed in as."""
+    from app.services.auth.auth import create_user
+
+    with session_factory() as session:
+        return create_user(session, "owner@example.com", "Owner", TEST_PASSWORD)
+
+
+def sign_in(client, session_factory, user):
+    """Give the test client a session cookie of `user`, as a browser has after signing in."""
+    from app.core.config import SESSION_COOKIE_NAME
+    from app.services.auth.auth import create_session
+
+    with session_factory() as session:
+        client.cookies.set(SESSION_COOKIE_NAME, create_session(session, user).token)
+    return client
+
+
 @pytest.fixture
 def queues(monkeypatch):
     """Exchanges and queues of this test only, removed at the end; skipped without a broker."""

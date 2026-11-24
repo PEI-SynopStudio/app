@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import ingestion, jobs, progress, projects, uploads
+from app.api import auth, ingestion, jobs, progress, projects, uploads
 from app.api.errors import storage_unavailable
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
 from app.database.session import get_session_factory
@@ -40,6 +40,7 @@ async def _lifespan(_: FastAPI):
 _configure_logging()
 app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
 app.add_exception_handler(ObjectStorageError, storage_unavailable)
+app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(ingestion.router)
 app.include_router(uploads.router)

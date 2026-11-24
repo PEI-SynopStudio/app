@@ -12,7 +12,7 @@ from app.core.config import (
     MediaAssetStatus,
     SourceType,
 )
-from app.database.models import Job, MediaAsset, UploadSession
+from app.database.models import Job, MediaAsset, UploadSession, User
 from app.schemas.job import IngestionParams, JobRequestMessage
 from app.schemas.timecode import parse_time
 from app.services.projects.projects import require_ingestion_allowed
@@ -36,6 +36,7 @@ def submit_url_ingestion(
     url: str,
     time_start: Optional[str],
     time_end: Optional[str],
+    actor: Optional[User] = None,
 ) -> Job:
     project = require_ingestion_allowed(db, project_id)
     asset = MediaAsset(
@@ -50,7 +51,7 @@ def submit_url_ingestion(
     db.add(asset)
     db.flush()  # assigns the ID; refusing the job rolls the asset back
     params = IngestionParams(source_url=url, time_start=time_start, time_end=time_end)
-    job = create_ingestion_job(db, project_id, params, url, media_asset_id=asset.id)
+    job = create_ingestion_job(db, project_id, params, url, media_asset_id=asset.id, actor=actor)
     _replace_previous_assets(db, storage, object_storage, job)
     return dispatch_job(
         db, dispatcher, job, JobRequestMessage(job_id=job.id, project_id=project.id, parameters=params)
@@ -67,11 +68,12 @@ def submit_upload_ingestion(
     session: UploadSession,
     time_start: Optional[str] = None,
     time_end: Optional[str] = None,
+    actor: Optional[User] = None,
 ) -> Job:
     """If the job is refused (e.g. 409) or the broker or storage fails, the session stays and the upload can be retried."""
     params = IngestionParams(media_id=session.media_asset_id, time_start=time_start, time_end=time_end)
     job = create_ingestion_job(
-        db, str(session.project_id), params, session.file_name, media_asset_id=session.media_asset_id
+        db, str(session.project_id), params, session.file_name, media_asset_id=session.media_asset_id, actor=actor
     )
     asset = db.get(MediaAsset, session.media_asset_id)
     asset.source_key = source_key(session.staged_file)
