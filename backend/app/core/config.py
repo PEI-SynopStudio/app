@@ -671,6 +671,8 @@ BASE64_PADDING = "="
 # The service-account token is renewed this long before it expires, so no Admin API call carries an expired one.
 ADMIN_TOKEN_REFRESH_MARGIN_SECONDS = 30
 AUTHORIZATION_HEADER = "Authorization"
+# Since Keycloak 26.8.2 the Admin API only accepts tokens with this scope (its audience check).
+KEYCLOAK_ADMIN_API_SCOPE = "kc-admin-api"
 BEARER_TOKEN_FORMAT = "Bearer {token}"
 # Characters left as they are when a value becomes one URL path segment: none, so "/" and ".." cannot change the path.
 URL_SEGMENT_SAFE_CHARACTERS = ""

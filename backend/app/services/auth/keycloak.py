@@ -28,6 +28,7 @@ from app.core.config import (
     ID_TOKEN_ALGORITHMS,
     ID_TOKEN_REQUIRED_CLAIMS,
     KEYCLOAK_ACCOUNT_PATH,
+    KEYCLOAK_ADMIN_API_SCOPE,
     KEYCLOAK_ADMIN_SESSION_PATH,
     KEYCLOAK_ADMIN_USER_LOGOUT_PATH,
     KEYCLOAK_ADMIN_USER_PATH,
@@ -224,7 +225,7 @@ class KeycloakIdentityProvider(IdentityProvider):
                 response = self._send(
                     self._http.post,
                     self._endpoint("token_endpoint"),
-                    data={"grant_type": OIDC_GRANT_CLIENT_CREDENTIALS},
+                    data={"grant_type": OIDC_GRANT_CLIENT_CREDENTIALS, "scope": KEYCLOAK_ADMIN_API_SCOPE},
                     auth=(self._client_id, self._client_secret),
                 )
                 tokens = self._json(self._checked(response))

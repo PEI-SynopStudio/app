@@ -67,6 +67,8 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "basic", "email"],
+      "optionalClientScopes": ["kc-admin-api"],
       "frontchannelLogout": false,
       "redirectUris": ["${APP_PUBLIC_URL}/api/auth/callback"],
       "webOrigins": [],
