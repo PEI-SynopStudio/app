@@ -1,6 +1,7 @@
 import asyncio
 from typing import List
 
+from app.database.models import Project
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -16,9 +17,8 @@ from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 
 @router.get(PROJECT_JOB_ROUTE, response_model=List[JobStatusResponseSchema])
-def read_project_jobs(project_id: str, db: Session = Depends(get_db)):
+def read_project_jobs(project: Project = Depends(require_project_access), db: Session = Depends(get_db)):
     try:
-        project = get_project(db, project_id)
         return list_project_jobs(db, project.id)
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
