@@ -1,6 +1,11 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+// Prefix of the backend API as the browser sees it; the backend's own routes have no prefix.
+const API_PREFIX = '/api'
+// Outside Docker the backend runs on the host; docker-compose.yml points this to the backend service.
+const DEFAULT_API_PROXY_TARGET = 'http://localhost:8000'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],

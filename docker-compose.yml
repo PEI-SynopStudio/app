@@ -5,6 +5,7 @@ services:
       - "5173:5173"
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      API_PROXY_TARGET: http://backend:8000
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -20,6 +21,8 @@ services:
       S3_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-pei}
       S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
       S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
     volumes:
       - ./backend:/app
       - media_data:/data/media
@@ -102,6 +105,8 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.2
     command: start-dev --import-realm
+    ports:
+      - "8080:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
@@ -109,12 +114,12 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: ${POSTGRES_USER:-pei}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-pei}
-      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://auth.localhost}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_PROXY_HEADERS: xforwarded
       KC_HEALTH_ENABLED: "true"
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
     volumes:
       - ./keycloak/import:/opt/keycloak/data/import:ro
     healthcheck:
