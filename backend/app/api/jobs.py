@@ -36,7 +36,7 @@ def read_job(project_id: str, job_id: str, db: Session = Depends(get_db)):
 
 
 # Cancel an active job and notify the clients
-@router.post(JOB_CANCEL_ROUTE, response_model=JobStatusResponseSchema)
+@router.post(JOB_CANCEL_ROUTE, response_model=JobStatusResponseSchema, dependencies= [Depends(require_project_access)])
 async def cancel_project_job(
     project_id: str,
     job_id: str,
