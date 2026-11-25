@@ -10,8 +10,10 @@ from app.core.config import (
     DB_ON_DELETE_CASCADE,
     EMAIL_MAX_LENGTH,
     FK_USER_ID,
+    IDP_SESSION_ID_MAX_LENGTH,
     IP_ADDRESS_MAX_LENGTH,
     PASSWORD_HASH_MAX_LENGTH,
+    SUBJECT_MAX_LENGTH,
     TABLE_AUTH_SESSIONS,
     TABLE_USERS,
     TOKEN_HASH_LENGTH,
@@ -28,6 +30,9 @@ class User(Base):
     __tablename__ = TABLE_USERS
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # The Keycloak "sub" claim: the stable link to the identity provider account (architecture §2).
+    # Empty for accounts created with a password, before Keycloak.
+    subject: Mapped[Optional[str]] = mapped_column(String(SUBJECT_MAX_LENGTH), unique=True, index=True)
     # Stored lower-cased, so the unique index also ignores case.
     email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(USER_NAME_MAX_LENGTH))
@@ -61,5 +66,9 @@ class AuthSession(Base):
     created_at: Mapped[datetime] = mapped_column(default=utc_now)
     # Moved forward when a session in use renews; indexed for the sweep that deletes expired sessions.
     expires_at: Mapped[datetime] = mapped_column(index=True)
-
+    # The Keycloak session ("sid" claim), ended at Keycloak when this session signs out.
+    idp_session_id: Mapped[Optional[str]] = mapped_column(String(IDP_SESSION_ID_MAX_LENGTH))
+    # When the user last entered a password at Keycloak ("auth_time"); deleting the account needs a recent one (T4.25).
+    authenticated_at: Mapped[Optional[datetime]]
+    
     user: Mapped[User] = relationship(back_populates="sessions")

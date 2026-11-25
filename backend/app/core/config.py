@@ -162,6 +162,8 @@ LOGOUT_ROUTE = "/logout"
 LOGOUT_ALL_ROUTE = "/logout-all"
 ME_ROUTE = "/me"
 PASSWORD_ROUTE = "/me/password"
+CALLBACK_ROUTE = "/callback"
+ACCOUNT_ROUTE = "/account"
 USER_AGENT_HEADER = "user-agent"
 SESSION_COOKIE_NAME = "synopstudio_session"
 LOGIN_COOKIE_NAME = "synopstudio_login"
@@ -597,6 +599,9 @@ SESSION_RENEW_FRACTION = 0.5
 # IPv6 in text form.
 IP_ADDRESS_MAX_LENGTH = 45
 USER_AGENT_MAX_LENGTH = 512
+# OpenID Connect identifiers ("sub", "sid") are at most 255 ASCII characters (OIDC Core 1.0 §2).
+SUBJECT_MAX_LENGTH = 255
+IDP_SESSION_ID_MAX_LENGTH = 255
 
 
 class AgeGroup(str, Enum):
