@@ -37,7 +37,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(USER_NAME_MAX_LENGTH))
     # Argon2id hash; the salt and parameters are part of the string. Empty for accounts from keycloak
-    password_hash: Mapped[str] = mapped_column(String(PASSWORD_HASH_MAX_LENGTH))
+    password_hash: Mapped[Optional[str]] = mapped_column(String(PASSWORD_HASH_MAX_LENGTH))
     age_group: Mapped[AgeGroup] = mapped_column(enum_type(AgeGroup))
     is_active: Mapped[bool] = mapped_column(default=True)
     is_admin: Mapped[bool] = mapped_column(default=False)

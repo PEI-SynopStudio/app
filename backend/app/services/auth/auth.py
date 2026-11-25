@@ -178,10 +178,13 @@ def create_session(
         token_hash=hash_token(token),
         ip_address=_truncate(ip_address, IP_ADDRESS_MAX_LENGTH),
         user_agent=_truncate(user_agent, USER_AGENT_MAX_LENGTH),
-        expires_at=utc_now() + _lifetime(),
+                expires_at=utc_now() + _lifetime(),
         idp_session_id=idp_session_id,
         authenticated_at=authenticated_at,
     )
+    db.add(session)
+    db.commit()
+    return NewSession(token=token, session=session)
 
 
 def resolve_session(db: Session, token: Optional[str]) -> Optional[AuthSession]:
