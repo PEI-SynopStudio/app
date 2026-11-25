@@ -19,11 +19,10 @@ from app.database.session import get_session_factory
 from app.main import app
 from app.schemas.job import IngestionParams, JobStatusResponseSchema
 from app.schemas.project import ProjectCreate
-from app.services.auth.auth import create_user
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
-from conftest import TEST_PASSWORD, sign_in
+from conftest import add_user, sign_in
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -137,8 +136,8 @@ def test_progress_needs_a_signed_in_user(client, db, user):
     assert closing_code(client, project_id) == WS_CLOSE_NOT_AUTHENTICATED
 
 
-def test_progress_of_someone_elses_project_is_not_found(client, db):
-    other = create_user(db, "other@example.com", "Other", TEST_PASSWORD)
+def test_progress_of_someone_elses_project_is_not_found(client, db, session_factory):
+    other = add_user(session_factory, subject="subject-2", email="other@example.com", name="Other")
 
     assert closing_code(client, make_project(db, other)) == WS_CLOSE_PROJECT_NOT_FOUND
 

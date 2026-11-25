@@ -658,6 +658,7 @@ class LoginErrorCode(str, Enum):
     LOGIN_FAILED = "login_failed"
     LOGIN_CANCELLED = "login_cancelled"
     AGE_GROUP_MISSING = "age_group_missing"
+    IDENTITY_PROVIDER_UNAVAILABLE = "identity_provider_unavailable"
 
 
 # Code the frontend reads on a 403 to start a fresh sign-in before deleting the account.
@@ -682,6 +683,13 @@ LOGIN_REASON_NONCE_MISMATCH = "the ID token nonce does not match the sign-in"
 LOGIN_REASON_MISSING_EMAIL = "the ID token has no email"
 LOGIN_REASON_AGE_GROUP = "the account has no valid age group"
 LOGIN_REASON_ACCOUNT_CONFLICT = "another account already has this email or subject"
+LOGIN_REASON_STATE_MISMATCH = "the callback does not belong to a sign-in started in this browser"
+LOGIN_REASON_RETURNED_ERROR = "Keycloak returned the error {error!r}"
+# Where to go after signing in: only a path on this site, so the login cannot redirect to another one.
+NEXT_QUERY_PARAM = "next"
+NEXT_PATH_PREFIX = "/"
+# Browsers read a backslash as "/", so a backslash after the first "/" would leave the site like "//".
+NEXT_PATH_FORBIDDEN_CHARACTERS = "\\"
 
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"
