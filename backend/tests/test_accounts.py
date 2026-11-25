@@ -1,16 +1,18 @@
 import uuid
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from app.core.config import AuditAction, JobTypeEnum
+from app.core.config import REAUTHENTICATION_REQUIRED_CODE, AuditAction, JobTypeEnum, get_settings
+from app.database.base import utc_now
 from app.database.models import AuditLog, AuthSession, Job, Project, User
 from app.main import app
-from app.services.auth.auth import actor_hash, create_user
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
-from conftest import TEST_PASSWORD, sign_in
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage
 
 PROJECT_BODY = {
@@ -31,44 +33,21 @@ def object_storage():
 
 
 @pytest.fixture
-def client(db_override, tmp_path, object_storage, session_factory, user):
+def client(db_override, identity_provider, tmp_path, object_storage, session_factory, user):
+    """Signed in just now, so the account can be deleted without signing in again."""
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path / "media")
     app.dependency_overrides[get_object_storage] = lambda: object_storage
     yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
-def delete_account(client, password=TEST_PASSWORD):
-    return client.request("DELETE", "/auth/me", json={"password": password})
+def delete_account(client):
+    return client.delete("/auth/me")
 
 
-def test_the_name_can_be_corrected(client):
-    response = client.patch("/auth/me", json={"name": "  Ana Silva "})
-
-    assert response.status_code == 200
-    assert client.get("/auth/me").json()["name"] == "Ana Silva"
-
-
-def test_a_new_email_needs_the_current_password(client):
-    missing = client.patch("/auth/me", json={"email": "new@example.com"})
-    wrong = client.patch("/auth/me", json={"email": "new@example.com", "current_password": "not-it"})
-    accepted = client.patch("/auth/me", json={"email": "New@Example.com", "current_password": TEST_PASSWORD})
-
-    assert (missing.status_code, wrong.status_code, accepted.status_code) == (403, 403, 200)
-    assert accepted.json()["email"] == "new@example.com"
-    assert client.post("/auth/login", json={"email": "new@example.com", "password": TEST_PASSWORD}).status_code == 200
-
-
-def test_an_email_in_use_is_refused(client, db):
-    create_user(db, "taken@example.com", "Other", TEST_PASSWORD)
-
-    response = client.patch("/auth/me", json={"email": "taken@example.com", "current_password": TEST_PASSWORD})
-
-    assert response.status_code == 409
-    assert client.get("/auth/me").json()["email"] == "owner@example.com"
-
-
-def test_deleting_the_account_removes_its_projects_and_keeps_the_audit_log(client, db, object_storage, user):
+def test_deleting_the_account_removes_it_here_and_at_keycloak_and_keeps_the_audit_log(
+    client, db, object_storage, identity_provider, user
+):
     project_id = client.post("/projects", json=PROJECT_BODY).json()["id"]
     object_storage.objects[(project_id, "proxy/proxy.mp4")] = b"x"
 
@@ -76,6 +55,7 @@ def test_deleting_the_account_removes_its_projects_and_keeps_the_audit_log(clien
 
     assert response.status_code == 204
     assert client.get("/auth/me").status_code == 401
+    assert identity_provider.deleted_accounts == ["subject-1"]
     db.expire_all()
     assert db.get(User, user.id) is None
     assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
@@ -85,15 +65,34 @@ def test_deleting_the_account_removes_its_projects_and_keeps_the_audit_log(clien
     assert (str(entry.project_id), entry.actor_hash) == (project_id, actor_hash(user.id))
 
 
-def test_a_wrong_password_keeps_the_account(client):
-    assert delete_account(client, "not-it").status_code == 403
-    assert client.get("/auth/me").status_code == 200
+def test_deleting_the_account_needs_a_recent_sign_in(client, db, identity_provider, session_factory, user):
+    too_old = utc_now() - timedelta(seconds=get_settings().reauth_max_age_seconds + 1)
+    browser = sign_in(TestClient(app), session_factory, user, authenticated_at=too_old)
+
+    response = delete_account(browser)
+
+    assert (response.status_code, response.json()["detail"]) == (403, REAUTHENTICATION_REQUIRED_CODE)
+    assert identity_provider.deleted_accounts == []
+    assert db.get(User, user.id) is not None
 
 
-def test_an_account_with_a_running_ingestion_cannot_be_deleted(client, db):
+def test_an_account_with_a_running_ingestion_cannot_be_deleted(client, db, identity_provider):
     project_id = client.post("/projects", json=PROJECT_BODY).json()["id"]
     db.add(Job(project_id=uuid.UUID(project_id), job_type=JobTypeEnum.INGESTION, parameters={}))
     db.commit()
 
     assert delete_account(client).status_code == 409
     assert client.get(f"/projects/{project_id}").status_code == 200
+    assert identity_provider.deleted_accounts == []
+
+
+def test_keycloak_down_keeps_the_account_so_the_deletion_can_be_repeated(client, db, identity_provider, user):
+    identity_provider.unavailable = True
+
+    assert delete_account(client).status_code == 503
+    assert client.get("/auth/me").status_code == 200
+
+    identity_provider.unavailable = False
+    assert delete_account(client).status_code == 204
+    db.expire_all()
+    assert db.get(User, user.id) is None

@@ -21,7 +21,7 @@ from app.database.session import get_session_factory
 from app.schemas.job import JobStatusResponseSchema
 from app.services.auth.auth import resolve_session
 from app.services.projects.projects import ProjectNotFoundError, get_project
-from app.services.workflow.jobs import latest_ingestion_job, latest_project_job
+from app.services.workflow.jobs import latest_project_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
@@ -31,7 +31,7 @@ class NotAuthenticatedError(Exception):
     pass
 
 
-# Send the current state of the project's ingestion job, then every change while the client stays connected.
+# Send the current state of the project's latest job, then every change while the client stays connected.
 # Only the project's owner may watch; the browser sends the session cookie with the handshake.
 @router.websocket(PROGRESS_WS_ROUTE)
 async def watch_progress(
@@ -72,8 +72,7 @@ def _latest_state(
         project = get_project(db, project_id)
         if not owns(session.user, project):
             raise ProjectNotFoundError(ERROR_PROJECT_NOT_FOUND.format(project_id=project_id))
-        job = latest_ingestion_job(db, project.id)
-        job = latest_project_job(db, get_project(db, project_id).id)
+        job = latest_project_job(db, project.id)
         return JobStatusResponseSchema.model_validate(job) if job is not None else None
 
 

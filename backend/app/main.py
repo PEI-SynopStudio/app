@@ -5,9 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import auth, ingestion, jobs, progress, projects, uploads
-from app.api.errors import storage_unavailable
+from app.api.errors import identity_provider_unavailable, storage_unavailable
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
 from app.database.session import get_session_factory
+from app.services.auth.identity_provider import IdentityProviderError
 from app.services.storage.object_storage import ObjectStorageError, get_object_storage
 from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.progress_hub import get_progress_hub
@@ -40,6 +41,7 @@ async def _lifespan(_: FastAPI):
 _configure_logging()
 app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
 app.add_exception_handler(ObjectStorageError, storage_unavailable)
+app.add_exception_handler(IdentityProviderError, identity_provider_unavailable)
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(ingestion.router)

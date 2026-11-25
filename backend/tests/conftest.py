@@ -163,26 +163,45 @@ def db_override(session_factory):
     app.dependency_overrides[get_db] = override
 
 
-TEST_PASSWORD = "correct horse battery staple"
+def add_user(session_factory, subject="subject-1", email="owner@example.com", name="Owner"):
+    """An account as the first Keycloak sign-in creates it."""
+    from app.services.auth.auth import provision_user
+    from fake_identity_provider import make_claims
+
+    with session_factory() as session:
+        return provision_user(session, make_claims(subject=subject, email=email, name=name))
 
 
 @pytest.fixture
 def user(session_factory):
     """The account the API clients of the tests are signed in as."""
-    from app.services.auth.auth import create_user
-
-    with session_factory() as session:
-        return create_user(session, "owner@example.com", "Owner", TEST_PASSWORD)
+    return add_user(session_factory)
 
 
-def sign_in(client, session_factory, user):
-    """Give the test client a session cookie of `user`, as a browser has after signing in."""
+def sign_in(client, session_factory, user, authenticated_at=None):
+    """Give the test client a session cookie of `user`, as a browser has right after signing in at Keycloak."""
     from app.core.config import SESSION_COOKIE_NAME
+    from app.database.base import utc_now
     from app.services.auth.auth import create_session
 
     with session_factory() as session:
-        client.cookies.set(SESSION_COOKIE_NAME, create_session(session, user).token)
+        new = create_session(
+            session, user, idp_session_id="idp-session-1", authenticated_at=authenticated_at or utc_now()
+        )
+        client.cookies.set(SESSION_COOKIE_NAME, new.token)
     return client
+
+
+@pytest.fixture
+def identity_provider():
+    """Keycloak replaced by a fake for the API; the client fixtures clear the override."""
+    from app.main import app
+    from app.services.auth.keycloak import get_identity_provider
+    from fake_identity_provider import FakeIdentityProvider
+
+    fake = FakeIdentityProvider()
+    app.dependency_overrides[get_identity_provider] = lambda: fake
+    return fake
 
 
 @pytest.fixture

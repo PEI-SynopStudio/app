@@ -1,12 +1,9 @@
-from typing import Optional
-
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import ERROR_ACCOUNT_BUSY, ERROR_EMAIL_TAKEN, ERROR_WRONG_PASSWORD, JOB_ACTIVE_STATUSES
+from app.core.config import ERROR_ACCOUNT_BUSY, JOB_ACTIVE_STATUSES
 from app.database.models import Job, User
-from app.services.auth.auth import EmailTakenError, WrongPasswordError, normalize_email, password_matches
+from app.services.auth.identity_provider import IdentityProvider
 from app.services.projects.projects import delete_project, list_projects
 from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorage
@@ -16,42 +13,21 @@ class AccountBusyError(Exception):
     pass
 
 
-# Correct the user's own account data; a new email needs the current password.
-# Source: GDPR Art. 16 (rectification); MS3 §1.1.2 (account data).
-def update_profile(
-    db: Session,
-    user: User,
-    name: Optional[str] = None,
-    email: Optional[str] = None,
-    current_password: Optional[str] = None,
-) -> User:
-    """Raises WrongPasswordError for a new email without the right password, EmailTakenError if it is in use."""
-    if email is not None and normalize_email(email) != user.email:
-        if current_password is None or not password_matches(user.password_hash, current_password):
-            raise WrongPasswordError(ERROR_WRONG_PASSWORD)
-        user.email = normalize_email(email)
-    if name is not None:
-        user.name = name
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise EmailTakenError(ERROR_EMAIL_TAKEN) from exc
-    return user
-
-
-# Delete the account with all its projects and their data; only the licence and editorial audit records remain.
+# Delete the account with all its projects and their data, here and at Keycloak; only the audit records remain.
 # Source: MS3 §1.1.2, §1.4.3 (account deletion, audit records kept for 12 months); GDPR Art. 17.
 def delete_account(
-    db: Session, storage: LocalStorage, object_storage: ObjectStorage, user: User, password: str
+    db: Session,
+    storage: LocalStorage,
+    object_storage: ObjectStorage,
+    identity_provider: IdentityProvider,
+    user: User,
 ) -> None:
     """Refused while a project has an active ingestion, because its worker would keep writing files for it.
 
-    Projects are deleted one by one, objects first (see delete_project): if the storage fails part way,
-    the account and the projects not reached yet stay, and the deletion can be repeated.
+    Order: projects (objects first, see delete_project), then the Keycloak account, then the local one.
+    If storage or Keycloak fails part way, the local account stays, so the user can still sign in and
+    repeat the deletion; Keycloak counts an account it no longer has as deleted.
     """
-    if not password_matches(user.password_hash, password):
-        raise WrongPasswordError(ERROR_WRONG_PASSWORD)
     projects = list_projects(db, user)
     if projects:
         active = (
@@ -63,5 +39,7 @@ def delete_account(
             raise AccountBusyError(ERROR_ACCOUNT_BUSY)
     for project in projects:
         delete_project(db, storage, object_storage, str(project.id), actor=user)
+    if user.subject is not None:
+        identity_provider.delete_user(user.subject)
     db.delete(user)  # its sessions go with it (ON DELETE CASCADE)
     db.commit()

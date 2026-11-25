@@ -185,8 +185,8 @@ def test_a_storage_outage_does_not_hide_the_stalled_jobs(session_factory, db, ob
 
 
 def test_expired_sessions_are_deleted_and_live_ones_kept(session_factory, db, object_storage, user, caplog):
-    live = create_session(db, user)
-    expired = create_session(db, user)
+    live = create_session(db, user, authenticated_at=utc_now())
+    expired = create_session(db, user, authenticated_at=utc_now())
     expired.session.expires_at = utc_now() - timedelta(seconds=1)
     db.commit()
 
