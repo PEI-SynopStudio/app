@@ -11,6 +11,7 @@ from app.database.models import Project
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.workflow.jobs import get_job, cancel_job, list_project_jobs
+from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 
