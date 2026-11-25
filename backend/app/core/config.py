@@ -681,6 +681,7 @@ LOGIN_REASON_UNKNOWN_KEY = "the ID token is signed with an unknown key"
 LOGIN_REASON_NONCE_MISMATCH = "the ID token nonce does not match the sign-in"
 LOGIN_REASON_MISSING_EMAIL = "the ID token has no email"
 LOGIN_REASON_AGE_GROUP = "the account has no valid age group"
+LOGIN_REASON_ACCOUNT_CONFLICT = "another account already has this email or subject"
 
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"

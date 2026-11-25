@@ -16,14 +16,18 @@ from app.core.config import (
     ERROR_INVALID_CREDENTIALS,
     ERROR_WRONG_PASSWORD,
     IP_ADDRESS_MAX_LENGTH,
+    LOGIN_REASON_ACCOUNT_CONFLICT,
     SESSION_RENEW_FRACTION,
     SESSION_TOKEN_BYTES,
     USER_AGENT_MAX_LENGTH,
+    USER_NAME_MAX_LENGTH,
     AgeGroup,
+    LoginErrorCode,
     get_settings,
 )
 from app.database.base import utc_now
 from app.database.models import AuthSession, User
+from app.services.auth.identity_provider import IdentityClaims, LoginRejectedError
 
 # Argon2id with argon2-cffi's default parameters (RFC 9106); each hash carries its own salt (MS3 §1.1.6).
 _hasher = PasswordHasher()
@@ -65,6 +69,8 @@ def actor_hash(user_id: uuid.UUID) -> str:
 
 
 def password_matches(password_hash: str, password: str) -> bool:
+    if password_hash is None:
+        return False
     try:
         return _hasher.verify(password_hash, password)
     except (VerificationError, InvalidHashError):
@@ -116,6 +122,29 @@ def authenticate(db: Session, email: str, password: str) -> User:
     return user
 
 
+def provision_user(db: Session, claims: IdentityClaims) -> User:
+    """Keycloak is the source of truth: name, email, age group and the admin role are copied at each sign-in.
+
+    The account is found by its Keycloak subject, so a changed email keeps the same account and projects.
+    """
+    user = db.scalar(select(User).where(User.subject == claims.subject))
+    if user is None:
+        user = User(subject=claims.subject)
+        db.add(user)
+    user.email = normalize_email(claims.email)
+    # Keycloak allows a first and a last name of 60 characters each, one more than the column holds.
+    user.name = claims.name[:USER_NAME_MAX_LENGTH]
+    user.age_group = claims.age_group
+    user.is_admin = claims.is_admin
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise LoginRejectedError(LoginErrorCode.LOGIN_FAILED, LOGIN_REASON_ACCOUNT_CONFLICT) from exc
+    db.refresh(user)
+    return user
+
+
 def _record_failed_login(db: Session, user: User, now: datetime) -> None:
     """Count a wrong password in one UPDATE, so parallel attempts cannot slip past the limit (MS3 §1.1.6)."""
     settings = get_settings()
@@ -135,8 +164,14 @@ def _record_failed_login(db: Session, user: User, now: datetime) -> None:
 
 
 def create_session(
-    db: Session, user: User, ip_address: Optional[str] = None, user_agent: Optional[str] = None
+    db: Session,
+    user: User,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    idp_session_id: Optional[str] = None,
+    authenticated_at: Optional[datetime] = None,
 ) -> NewSession:
+    """idp_session_id and authenticated_at come from the Keycloak sign-in that opened this session."""
     token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
     session = AuthSession(
         user_id=user.id,
@@ -144,10 +179,9 @@ def create_session(
         ip_address=_truncate(ip_address, IP_ADDRESS_MAX_LENGTH),
         user_agent=_truncate(user_agent, USER_AGENT_MAX_LENGTH),
         expires_at=utc_now() + _lifetime(),
+        idp_session_id=idp_session_id,
+        authenticated_at=authenticated_at,
     )
-    db.add(session)
-    db.commit()
-    return NewSession(token=token, session=session)
 
 
 def resolve_session(db: Session, token: Optional[str]) -> Optional[AuthSession]:
@@ -174,10 +208,22 @@ def renew_if_due(db: Session, session: AuthSession) -> bool:
     return True
 
 
-def revoke_session(db: Session, token: Optional[str]) -> None:
-    if token:
-        db.execute(delete(AuthSession).where(AuthSession.token_hash == hash_token(token)))
-        db.commit()
+def is_recently_authenticated(session: AuthSession) -> bool:
+    """Whether the password was entered at Keycloak recently enough to delete the account (T4.25)."""
+    if session.authenticated_at is None:
+        return False
+    return utc_now() - session.authenticated_at <= timedelta(seconds=get_settings().reauth_max_age_seconds)
+
+
+def revoke_session(db: Session, token: Optional[str]) -> Optional[str]:
+    """End the session of this token; returns its Keycloak session, so the caller can end that one too."""
+    if not token:
+        return None
+    idp_session_id = db.scalar(
+        delete(AuthSession).where(AuthSession.token_hash == hash_token(token)).returning(AuthSession.idp_session_id)
+    )
+    db.commit()
+    return idp_session_id
 
 
 def revoke_user_sessions(db: Session, user_id: uuid.UUID, keep: Optional[uuid.UUID] = None) -> None:

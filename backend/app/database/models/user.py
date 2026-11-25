@@ -36,7 +36,7 @@ class User(Base):
     # Stored lower-cased, so the unique index also ignores case.
     email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(USER_NAME_MAX_LENGTH))
-    # Argon2id hash; the salt and parameters are part of the string (MS3 §1.1.6).
+    # Argon2id hash; the salt and parameters are part of the string. Empty for accounts from keycloak
     password_hash: Mapped[str] = mapped_column(String(PASSWORD_HASH_MAX_LENGTH))
     age_group: Mapped[AgeGroup] = mapped_column(enum_type(AgeGroup))
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -70,5 +70,5 @@ class AuthSession(Base):
     idp_session_id: Mapped[Optional[str]] = mapped_column(String(IDP_SESSION_ID_MAX_LENGTH))
     # When the user last entered a password at Keycloak ("auth_time"); deleting the account needs a recent one (T4.25).
     authenticated_at: Mapped[Optional[datetime]]
-    
+
     user: Mapped[User] = relationship(back_populates="sessions")
