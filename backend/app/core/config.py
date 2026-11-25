@@ -663,6 +663,25 @@ class LoginErrorCode(str, Enum):
 # Code the frontend reads on a 403 to start a fresh sign-in before deleting the account.
 REAUTHENTICATION_REQUIRED_CODE = "reauthentication_required"
 
+# Claims every ID token must carry; a token without one of them is refused.
+ID_TOKEN_REQUIRED_CLAIMS = ("exp", "iat", "iss", "aud", "sub", "nonce", "auth_time")
+# Base64url without padding, as PKCE requires (RFC 7636 §4.2).
+BASE64_PADDING = "="
+# The service-account token is renewed this long before it expires, so no Admin API call carries an expired one.
+ADMIN_TOKEN_REFRESH_MARGIN_SECONDS = 30
+AUTHORIZATION_HEADER = "Authorization"
+BEARER_TOKEN_FORMAT = "Bearer {token}"
+# Characters left as they are when a value becomes one URL path segment: none, so "/" and ".." cannot change the path.
+URL_SEGMENT_SAFE_CHARACTERS = ""
+# Why a sign-in was refused; only logged, the browser gets a LoginErrorCode.
+LOGIN_REASON_CODE_REFUSED = "Keycloak refused the authorization code"
+LOGIN_REASON_MISSING_ID_TOKEN = "the token response has no ID token"
+LOGIN_REASON_INVALID_ID_TOKEN = "the ID token is invalid: {error}"
+LOGIN_REASON_UNKNOWN_KEY = "the ID token is signed with an unknown key"
+LOGIN_REASON_NONCE_MISMATCH = "the ID token nonce does not match the sign-in"
+LOGIN_REASON_MISSING_EMAIL = "the ID token has no email"
+LOGIN_REASON_AGE_GROUP = "the account has no valid age group"
+
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"
     LICENCE_CONFIRMED = "licence.confirmed"
