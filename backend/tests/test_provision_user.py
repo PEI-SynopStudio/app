@@ -6,13 +6,7 @@ from sqlalchemy import select
 from app.core.config import USER_NAME_MAX_LENGTH, AgeGroup, LoginErrorCode, get_settings
 from app.database.base import utc_now
 from app.database.models import AuthSession, User
-from app.services.auth.auth import (
-    create_session,
-    create_user,
-    is_recently_authenticated,
-    provision_user,
-    revoke_session,
-)
+from app.services.auth.auth import create_session, is_recently_authenticated, provision_user, revoke_session
 from app.services.auth.identity_provider import LoginRejectedError
 from fake_identity_provider import make_claims
 
@@ -21,7 +15,6 @@ def test_the_first_sign_in_creates_the_account_from_keycloak(db):
     user = provision_user(db, make_claims(email="Ana@Example.com", name="Ana", is_admin=True))
 
     assert (user.subject, user.email, user.name, user.is_admin) == ("subject-1", "ana@example.com", "Ana", True)
-    assert user.password_hash is None
 
 
 def test_a_later_sign_in_refreshes_the_same_account(db):
@@ -52,14 +45,24 @@ def test_a_name_longer_than_the_column_is_cut(db):
     assert len(user.name) == USER_NAME_MAX_LENGTH
 
 
-def test_an_email_of_an_account_from_before_keycloak_is_refused(db):
-    create_user(db, "owner@example.com", "Owner", "correct horse battery staple")
+def test_an_email_can_move_to_another_keycloak_account(db):
+    """Keycloak keeps emails unique; here an old copy must not block the account that has the email now."""
+    provision_user(db, make_claims(subject="subject-1", email="ana@example.com"))
+
+    other = provision_user(db, make_claims(subject="subject-2", email="ana@example.com"))
+
+    assert other.subject == "subject-2"
+
+
+def test_a_parallel_first_sign_in_of_the_same_account_is_refused(db, monkeypatch):
+    provision_user(db, make_claims())
+    # The other sign-in created the account after this one looked for it.
+    monkeypatch.setattr(db, "scalar", lambda statement: None)
 
     with pytest.raises(LoginRejectedError) as rejected:
-        provision_user(db, make_claims(email="owner@example.com"))
+        provision_user(db, make_claims())
 
     assert rejected.value.code == LoginErrorCode.LOGIN_FAILED
-    assert db.scalar(select(User).where(User.subject == "subject-1")) is None
 
 
 def test_a_session_keeps_its_keycloak_session_and_returns_it_when_revoked(db):
@@ -77,13 +80,11 @@ def test_revoking_a_missing_session_returns_nothing(db, token):
     assert revoke_session(db, token) is None
 
 
-@pytest.mark.parametrize("age, recent", [(timedelta(), True), (None, False)])
-def test_a_recent_password_entry_allows_sensitive_actions(db, age, recent):
+def test_a_recent_password_entry_allows_sensitive_actions(db):
     user = provision_user(db, make_claims())
-    authenticated_at = None if age is None else utc_now() - age
-    session = create_session(db, user, authenticated_at=authenticated_at).session
+    session = create_session(db, user, authenticated_at=utc_now()).session
 
-    assert is_recently_authenticated(session) is recent
+    assert is_recently_authenticated(session) is True
 
 
 def test_an_old_password_entry_does_not(db):

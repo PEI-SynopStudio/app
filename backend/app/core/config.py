@@ -42,9 +42,6 @@ ENV_TRUE_VALUE = "true"
 DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600
 # Local development runs over plain HTTP; behind TLS, set SESSION_COOKIE_SECURE=true.
 DEFAULT_SESSION_COOKIE_SECURE = "false"
-# Brute-force detection (MS3 §1.1.6): consecutive wrong passwords before the account is locked, and for how long.
-DEFAULT_LOGIN_MAX_FAILED_ATTEMPTS = 5
-DEFAULT_LOGIN_LOCKOUT_SECONDS = 15 * 60
 
 DEFAULT_KEYCLOAK_PUBLIC_URL = "http://localhost:8080"
 DEFAULT_KEYCLOAK_INTERNAL_URL = "http://keycloak:8080"
@@ -98,13 +95,8 @@ ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
 ERROR_NOT_AUTHENTICATED = "Sign in to continue."
-# One message for an unknown email, a wrong password, a locked or a disabled account: it never reveals which.
-ERROR_INVALID_CREDENTIALS = "The email or password is incorrect."
-ERROR_EMAIL_TAKEN = "An account with this email already exists."
-ERROR_WRONG_PASSWORD = "The current password is incorrect."
 ERROR_ACCOUNT_BUSY = "The account cannot be deleted while an ingestion is running in one of its projects."
 ERROR_IDENTITY_PROVIDER_UNAVAILABLE = "The sign-in service is unavailable; please try again."
-ERROR_REAUTHENTICATION_REQUIRED = "Sign in again to confirm this action."
 LOG_IDENTITY_PROVIDER_UNAVAILABLE = "Identity provider request failed"
 LOG_IDENTITY_PROVIDER_LOGOUT_FAILED = "Could not end the identity provider session"
 LOG_LOGIN_REJECTED = "Sign-in rejected: %s"
@@ -161,7 +153,6 @@ LOGIN_ROUTE = "/login"
 LOGOUT_ROUTE = "/logout"
 LOGOUT_ALL_ROUTE = "/logout-all"
 ME_ROUTE = "/me"
-PASSWORD_ROUTE = "/me/password"
 CALLBACK_ROUTE = "/callback"
 ACCOUNT_ROUTE = "/account"
 USER_AGENT_HEADER = "user-agent"
@@ -585,12 +576,7 @@ TABLE_AUTH_SESSIONS = "auth_sessions"
 FK_USER_ID = f"{TABLE_USERS}.id"
 # The longest address SMTP accepts (RFC 5321).
 EMAIL_MAX_LENGTH = 254
-USER_NAME_MIN_LENGTH = 1
 USER_NAME_MAX_LENGTH = 120
-PASSWORD_MIN_LENGTH = 8
-# Argon2 accepts any length; the cap keeps one request from costing seconds of CPU.
-PASSWORD_MAX_LENGTH = 128
-PASSWORD_HASH_MAX_LENGTH = 255
 SESSION_TOKEN_BYTES = 32
 # SHA-256 as hex.
 TOKEN_HASH_LENGTH = 64
@@ -766,8 +752,6 @@ class Settings:
     database_echo: bool
     session_ttl_seconds: int
     session_cookie_secure: bool
-    login_max_failed_attempts: int
-    login_lockout_seconds: int
     job_queued_stalled_after_seconds: int
     keycloak_public_url: str
     keycloak_internal_url: str
@@ -818,10 +802,6 @@ def get_settings() -> Settings:
         session_cookie_secure=(
             os.environ.get("SESSION_COOKIE_SECURE", DEFAULT_SESSION_COOKIE_SECURE).lower() == ENV_TRUE_VALUE
         ),
-        login_max_failed_attempts=int(
-            os.environ.get("LOGIN_MAX_FAILED_ATTEMPTS", DEFAULT_LOGIN_MAX_FAILED_ATTEMPTS)
-        ),
-        login_lockout_seconds=int(os.environ.get("LOGIN_LOCKOUT_SECONDS", DEFAULT_LOGIN_LOCKOUT_SECONDS)),
         keycloak_public_url=os.environ.get("KEYCLOAK_PUBLIC_URL", DEFAULT_KEYCLOAK_PUBLIC_URL),
         keycloak_internal_url=os.environ.get("KEYCLOAK_INTERNAL_URL", DEFAULT_KEYCLOAK_INTERNAL_URL),
         keycloak_realm=os.environ.get("KEYCLOAK_REALM", DEFAULT_KEYCLOAK_REALM),
