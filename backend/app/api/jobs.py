@@ -1,18 +1,16 @@
 import asyncio
 from typing import List
 
-from app.database.models import Project
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import JOB_ROUTE, JOBS_ROUTE_TAG, PROJECTS_ROUTE_PREFIX, JOB_CANCEL_ROUTE, PROJECT_JOB_ROUTE
+from app.database.models import Project
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
-from app.services.projects.projects import get_project
 from app.services.workflow.jobs import get_job, cancel_job, list_project_jobs
-from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 router = APIRouter(prefix=PROJECTS_ROUTE_PREFIX, tags=[JOBS_ROUTE_TAG])
 
