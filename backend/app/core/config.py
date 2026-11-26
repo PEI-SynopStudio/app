@@ -983,6 +983,17 @@ HTTP_SERVER_ERROR_MIN_STATUS = 500
 OLLAMA_STREAM_ERROR_STATUS = -1
 ERROR_LLM_SERVER_UNAVAILABLE = "The {provider} server at {base_url} is unavailable for model {model!r}: {details}"
 ERROR_LLM_REQUEST_FAILED = "The {provider} server at {base_url} refused the request for model {model!r}: {details}"
+# Self-hosted OpenAI-compatible servers (vLLM, llama.cpp, LM Studio): the reply is constrained by response_format.
+OPENAI_RESPONSE_FORMAT_TYPE = "json_schema"
+# Strict mode accepts only a subset of JSON Schema; LLMClient validates every reply anyway.
+OPENAI_RESPONSE_FORMAT_STRICT = False
+# Qwen3 reasoning switch read by the chat templates of vLLM and llama.cpp; servers that do not know it ignore it.
+OPENAI_CHAT_TEMPLATE_KWARGS_KEY = "chat_template_kwargs"
+OPENAI_ENABLE_THINKING_KEY = "enable_thinking"
+# Retries belong to LLMClient, so the OpenAI library makes none of its own.
+OPENAI_CLIENT_MAX_RETRIES = 0
+# ChatOpenAI needs a key; servers started without one accept any value.
+OPENAI_COMPATIBLE_NO_API_KEY = "not-needed"
 
 
 @dataclass(frozen=True)
