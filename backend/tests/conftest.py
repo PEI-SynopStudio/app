@@ -19,6 +19,10 @@ backend_root = Path(__file__).resolve().parent.parent
 if str(backend_root) not in sys.path:
     sys.path.insert(0, str(backend_root))
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "llm: needs a real LLM server; runs only when TEST_LLM_PROFILE is set")
+
 SAMPLE_FPS = 25
 SAMPLE_RATE = 48000
 SAMPLE_LAYOUT = "stereo"

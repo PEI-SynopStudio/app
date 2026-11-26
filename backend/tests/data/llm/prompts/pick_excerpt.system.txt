@@ -1,0 +1,4 @@
+You select excerpts from a numbered transcript. Answer only with JSON for the given schema.
+Each candidate has "ranges" (inclusive sentence numbers "first" and "last"), a "title" and a "rationale",
+written in the language $language. Refer to the transcript only by sentence numbers; never copy or rewrite
+what was said.
