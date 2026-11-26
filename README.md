@@ -47,17 +47,21 @@ Até o serviço `ollama` entrar no `docker-compose.yml` (T4.16a), o Ollama corre
 
 1. Instalar o Ollama: https://ollama.com/download
 2. Descarregar o modelo do perfil: `ollama pull qwen3:1.7b` (portátil) ou `ollama pull qwen3:8b` (VM).
-3. Aceitar ligações dos contentores com `OLLAMA_HOST=0.0.0.0`. No Linux com systemd: `sudo systemctl edit ollama`,
-   acrescentar `Environment="OLLAMA_HOST=0.0.0.0"` na secção `[Service]` e `sudo systemctl restart ollama`.
-   A porta 11434 fica aberta na rede local: usar só em redes de confiança ou bloquear a porta na firewall.
-4. Nos contentores: `LLM_PROFILE=ollama-small` e `LLM_BASE_URL=http://host.docker.internal:11434`. No Linux este
-   nome precisa de `--add-host=host.docker.internal:host-gateway` (ou `extra_hosts` no compose).
+3. Ligar os contentores ao Ollama do host (`docker info` mostra qual dos dois casos é o teu):
+   - Docker Desktop (Linux, macOS ou Windows): `host.docker.internal` já chega ao Ollama em `127.0.0.1`; não é
+     preciso mudar nada.
+   - Docker Engine no Linux, sem Docker Desktop: o Ollama tem de ouvir em `0.0.0.0` (`sudo systemctl edit ollama`,
+     acrescentar `Environment="OLLAMA_HOST=0.0.0.0"` na secção `[Service]` e `sudo systemctl restart ollama`) e o
+     contentor precisa de `--add-host=host.docker.internal:host-gateway` (ou `extra_hosts` no compose). A porta
+     11434 fica aberta na rede local: usar só em redes de confiança ou bloquear a porta na firewall.
+4. Nos contentores: `LLM_PROFILE=ollama-small` e `LLM_BASE_URL=http://host.docker.internal:11434`.
 
 Teste opcional com o modelo real (marker `llm`; nunca corre no CI). A imagem `app-backend` é a que o
-`docker compose build backend` cria a partir da pasta `app`:
+`docker compose build backend` cria a partir da pasta `app`. Com Docker Engine no Linux, acrescentar
+`--add-host=host.docker.internal:host-gateway`:
 
 ```bash
-docker run --rm --add-host=host.docker.internal:host-gateway -v "$PWD/backend:/app" -w /app -e PYTHONDONTWRITEBYTECODE=1 -e TEST_LLM_PROFILE=ollama-small -e LLM_BASE_URL=http://host.docker.internal:11434 app-backend sh -c "pip install -q --root-user-action=ignore -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider -m llm tests/test_llm_real.py"
+docker run --rm -v "$PWD/backend:/app" -w /app -e PYTHONDONTWRITEBYTECODE=1 -e TEST_LLM_PROFILE=ollama-small -e LLM_BASE_URL=http://host.docker.internal:11434 app-backend sh -c "pip install -q --root-user-action=ignore -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider -m llm tests/test_llm_real.py"
 ```
 
 Cada chamada ao LLM escreve uma linha INFO (prompt e versão, modelo, tentativas, segundos, tokens). Os textos dos
