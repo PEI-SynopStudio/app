@@ -443,6 +443,7 @@ class JobTypeEnum(str, Enum):
     """The pipeline a job runs."""
     INGESTION = "ingestion"
     TRANSCRIPTION = "transcription"
+    CLIP_PROPOSAL = "clip_proposal"
 
 
 class JobStatusEnum(str, Enum):
@@ -464,6 +465,10 @@ class JobStepProcessingEnum(str, Enum):
     GENERATING_PROXY = "generating_proxy"  # proxy video and keyframes
     TRANSCRIBING = "transcribing"
     DIARIZING = "diarizing"  # who spoke when
+    SEGMENTING_TOPICS = "segmenting_topics"
+    PROPOSING_CLIPS = "proposing_clips"
+    VALIDATING_CLIPS = "validating_clips"  # no LLM: sentence numbers become exact word times
+    RANKING_CLIPS = "ranking_clips"
     PERSISTING_RESULTS = "persisting_results"  # sending artefacts to storage and the database
     CLEANING_UP = "cleaning_up"  # removing temporary files
     FINISHED = "finished"
@@ -482,6 +487,7 @@ class JobErrorCodeEnum(str, Enum):
     TIMEOUT = "timeout"
     NO_SPEECH_DETECTED = "no_speech_detected"
     MODEL_UNAVAILABLE = "model_unavailable"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
 
 
 class AcousticProfileEnum(str, Enum):
@@ -538,6 +544,16 @@ JOB_STEP_MESSAGES = {
         JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
         JobStepProcessingEnum.FINISHED: "Transcription completed",
     },
+    JobTypeEnum.CLIP_PROPOSAL: {
+        JobStepProcessingEnum.INITIALIZING: "Reading the transcript",
+        JobStepProcessingEnum.SEGMENTING_TOPICS: "Finding the topics",
+        JobStepProcessingEnum.PROPOSING_CLIPS: "Selecting clip candidates",
+        JobStepProcessingEnum.VALIDATING_CLIPS: "Checking the clips against the transcript",
+        JobStepProcessingEnum.RANKING_CLIPS: "Ranking the clips",
+        JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the proposals",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
+        JobStepProcessingEnum.FINISHED: "Clip proposals ready",
+    },
 }
 PROGRESS_DECIMALS = 2
 # Every progress event is a database write, so a step reports at most once per interval.
@@ -559,6 +575,16 @@ JOB_STEP_WEIGHTS = {
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
         JobStepProcessingEnum.TRANSCRIBING: (5.0, 90.0),
+        JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
+        JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
+        JobStepProcessingEnum.FINISHED: (100.0, 100.0),
+    },
+    JobTypeEnum.CLIP_PROPOSAL: {
+        JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
+        JobStepProcessingEnum.SEGMENTING_TOPICS: (5.0, 35.0),
+        JobStepProcessingEnum.PROPOSING_CLIPS: (35.0, 75.0),
+        JobStepProcessingEnum.VALIDATING_CLIPS: (75.0, 80.0),
+        JobStepProcessingEnum.RANKING_CLIPS: (80.0, 90.0),
         JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
         JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
         JobStepProcessingEnum.FINISHED: (100.0, 100.0),
@@ -655,6 +681,7 @@ REPLACEABLE_ASSET_STATUSES = (MediaAssetStatus.READY, MediaAssetStatus.FAILED)
 JOB_ACTIVE_STATUSES = (JobStatusEnum.PENDING, JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING)
 JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
 JOB_ACTIVE_TRANSCRIPTION_INDEX = "uq_jobs_one_active_transcription_per_project"
+JOB_ACTIVE_CLIP_PROPOSAL_INDEX = "uq_jobs_one_active_clip_proposal_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
@@ -778,6 +805,13 @@ class AuditAction(str, Enum):
     TRANSCRIPTION_REQUESTED = "transcription.requested"
     TRANSCRIPTION_COMPLETED = "transcription.completed"
     TRANSCRIPTION_FAILED = "transcription.failed"
+    CLIP_PROPOSAL_REQUESTED = "clip_proposal.requested"
+    CLIP_PROPOSAL_COMPLETED = "clip_proposal.completed"
+    CLIP_PROPOSAL_FAILED = "clip_proposal.failed"
+    TOPICS_GENERATED = "topics.generated"
+    CLIP_PROPOSED = "clip.proposed"
+    CLIP_APPROVED = "clip.approved"
+    CLIP_REJECTED = "clip.rejected"
     PROJECT_DELETED = "project.deleted"
 
 
@@ -813,6 +847,85 @@ ASSET_METADATA_FIELDS = (
     "keyframes_key",
 )
 LOG_JOB_EVENT_REJECTED = "Event rejected for job %s: %s"
+
+
+# --- Clip generation – shared (docs/llm-contract.md, section 15.1) ---
+class AspectRatioEnum(str, Enum):
+    """Format a clip is proposed for (FR09)."""
+    LANDSCAPE = "16:9"
+    PORTRAIT = "9:16"
+
+
+class ClipStatusEnum(str, Enum):
+    """Review status; only approved clips are rendered or exported (FR15)."""
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ClipWarningEnum(str, Enum):
+    CONTEXT_LOSS = "context_loss"  # joins parts of the original that are not consecutive (FR11)
+    DURATION_ADJUSTED = "duration_adjusted"  # sentences added or removed to fit the requested duration
+
+
+class DiscardReasonEnum(str, Enum):
+    """Why validation or ranking dropped a candidate."""
+    UNKNOWN_SENTENCE = "unknown_sentence"
+    TOO_SHORT = "too_short"
+    TOO_LONG = "too_long"
+    FABRICATED_QUOTE = "fabricated_quote"
+    DUPLICATE = "duplicate"
+    BELOW_RANK = "below_rank"
+
+
+class ScoreCriterionEnum(str, Enum):
+    """Rated from 1 to 5 by the LLM (T4.15); rigour comes before engagement (FR10)."""
+    COMPLETENESS = "completeness"
+    RIGOUR = "rigour"
+    STANDALONE = "standalone"  # understandable out of context
+    TOPIC_MATCH = "topic_match"
+
+
+class LLMRoleEnum(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class LlmProviderEnum(str, Enum):
+    """Kind of LLM server, chosen by configuration only (NFR Maintainability)."""
+    OLLAMA = "ollama"
+    OPENAI_COMPATIBLE = "openai_compatible"
+
+
+# Sentence, word, topic and clip positions start at 0, like transcript_words.position.
+FIRST_POSITION = 0
+# Clip duration range and default (NFR Performance: 5–180 s, 15–60 s by default).
+CLIP_MIN_SECONDS = 5
+CLIP_MAX_SECONDS = 180
+CLIP_DEFAULT_MIN_SECONDS = 15
+CLIP_DEFAULT_MAX_SECONDS = 60
+CLIP_TOPIC_MAX_LENGTH = 200
+CLIP_AUDIENCE_MAX_LENGTH = 200
+CLIP_TITLE_MAX_LENGTH = 120
+CLIP_RATIONALE_MAX_LENGTH = 600
+CHAPTER_TITLE_MAX_LENGTH = 120
+CHAPTER_SUMMARY_MAX_LENGTH = 600
+# Most separate parts of the original one proposed clip may join.
+CLIP_MAX_RANGES = 3
+RATING_MIN = 1
+RATING_MAX = 5
+SCORE_MIN = 0.0
+SCORE_MAX = 1.0
+ERROR_RANGE_ORDER = "Invalid sentence range: last ({last}) is before first ({first})."
+ERROR_CLIP_DURATION_ORDER = "max_duration_seconds must not be below min_duration_seconds."
+CLIPS_DIR = "clips"
+CLIP_TRANSCRIPT_FILE = "transcript.json"
+CLIP_PROPOSALS_FILE = "proposals.json"
+PROMPT_TOPIC_SEGMENTATION = "topic_segmentation"
+PROMPT_CLIP_CANDIDATES = "clip_candidates"
+PROMPT_CLIP_RATING = "clip_rating"
+PROMPT_CLIP_METADATA = "clip_metadata"  # reserved for T4.23
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
