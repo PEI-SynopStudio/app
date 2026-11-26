@@ -994,6 +994,13 @@ OPENAI_ENABLE_THINKING_KEY = "enable_thinking"
 OPENAI_CLIENT_MAX_RETRIES = 0
 # ChatOpenAI needs a key; servers started without one accept any value.
 OPENAI_COMPATIBLE_NO_API_KEY = "not-needed"
+# Provider profiles (docs/llm-contract.md §7.5); precedence: environment variable > profile > default in this file.
+LLM_CONFIG_FILE_NAME = "llm.toml"
+DEFAULT_LLM_CONFIG_FILE = str(Path(__file__).resolve().parent / LLM_CONFIG_FILE_NAME)
+LLM_CONFIG_FILE_ENCODING = "utf-8"  # TOML files are always UTF-8
+ERROR_LLM_PROFILE_UNKNOWN = "Unknown LLM profile {profile!r} in {path} (available: {available})."
+ERROR_LLM_PROVIDER_UNKNOWN = "Unknown LLM provider {provider!r} in profile {profile!r} (allowed: {allowed})."
+ERROR_LLM_API_KEY_MISSING = "LLM profile {profile!r} needs an API key in the environment variable {variable}."
 
 
 @dataclass(frozen=True)
@@ -1016,6 +1023,11 @@ class LLMSettings:
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())
+
+
+def _optional_env(name: str) -> Optional[str]:
+    """The value of an environment variable, or None when it is unset or empty (compose passes ${VAR:-} as empty)."""
+    return os.environ.get(name) or None
 
 
 @dataclass(frozen=True)
@@ -1062,11 +1074,17 @@ class Settings:
     login_request_ttl_seconds: int
     reauth_max_age_seconds: int
     llm_log_content: bool
+    llm_config_file: Path
+    llm_profile: Optional[str]  # None: default_profile of the file
+    llm_base_url: Optional[str]  # None: the profile's value
+    llm_model: Optional[str]
+    llm_timeout_seconds: Optional[float]
 
 
 @lru_cache
 def get_settings() -> Settings:
     """Load settings from environment variables (cached; call get_settings.cache_clear() after changing env)."""
+    llm_timeout_seconds = _optional_env("LLM_TIMEOUT_SECONDS")
     return Settings(
         media_root=Path(os.environ.get("MEDIA_ROOT", DEFAULT_MEDIA_ROOT)),
         rabbitmq_url=os.environ.get("RABBITMQ_URL", DEFAULT_RABBITMQ_URL),
@@ -1118,4 +1136,9 @@ def get_settings() -> Settings:
         ),
         reauth_max_age_seconds=int(os.environ.get("REAUTH_MAX_AGE_SECONDS", DEFAULT_REAUTH_MAX_AGE_SECONDS)),
         llm_log_content=os.environ.get("LLM_LOG_CONTENT", DEFAULT_LLM_LOG_CONTENT).lower() == ENV_TRUE_VALUE,
+        llm_config_file=Path(_optional_env("LLM_CONFIG_FILE") or DEFAULT_LLM_CONFIG_FILE),
+        llm_profile=_optional_env("LLM_PROFILE"),
+        llm_base_url=_optional_env("LLM_BASE_URL"),
+        llm_model=_optional_env("LLM_MODEL"),
+        llm_timeout_seconds=float(llm_timeout_seconds) if llm_timeout_seconds else None,
     )

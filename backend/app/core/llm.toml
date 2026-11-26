@@ -1,0 +1,21 @@
+# app/core/llm.toml – LLM profiles; select one with LLM_PROFILE. No secrets here: API keys come from
+# the environment variable named in api_key_env.
+default_profile = "ollama-qwen"
+
+[profiles.ollama-qwen]          # project VM
+provider = "ollama"
+base_url = "http://ollama:11434"
+model = "qwen3:8b"
+context_tokens = 16384
+
+[profiles.ollama-small]         # development laptops
+provider = "ollama"
+base_url = "http://ollama:11434"
+model = "qwen3:1.7b"
+context_tokens = 8192
+
+[profiles.openai-compatible]    # any self-hosted OpenAI-compatible server (vLLM, llama.cpp, LM Studio)
+provider = "openai_compatible"
+base_url = "http://vllm:8000/v1"
+model = "Qwen/Qwen3-8B"
+api_key_env = "LLM_API_KEY"
