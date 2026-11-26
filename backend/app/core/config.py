@@ -928,6 +928,23 @@ PROMPT_CLIP_RATING = "clip_rating"
 PROMPT_CLIP_METADATA = "clip_metadata"  # reserved for T4.23
 
 
+# --- LLM layer (docs/llm-contract.md, section 15.2) ---
+APP_DIR = Path(__file__).resolve().parents[1]
+# Prompt texts: {name}.system.txt and {name}.user.txt, written with the steps that use them (T4.12, T4.13, T4.15).
+PROMPTS_DIR = APP_DIR / "prompts"
+PROMPT_SYSTEM_SUFFIX = ".system.txt"
+PROMPT_USER_SUFFIX = ".user.txt"
+PROMPT_FILE_ENCODING = "utf-8"
+# A prompt's version is the start of the SHA-256 of its two files, joined by the separator.
+PROMPT_VERSION_LENGTH = 12
+PROMPT_VERSION_SEPARATOR = b"\0"
+# Control characters and line breaks in user text become one space, so the text stays inside its block of the prompt.
+PROMPT_CONTROL_CHARACTERS_PATTERN = r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+"
+PROMPT_TEXT_SEPARATOR = " "
+ERROR_PROMPT_VARIABLES = "Prompt {name!r}: missing variables {missing}, unused variables {unused}."
+ERROR_PROMPT_INVALID_PLACEHOLDER = "Prompt {name!r} has an invalid placeholder; write a literal $ as $$."
+
+
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())
