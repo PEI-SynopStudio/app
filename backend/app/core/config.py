@@ -1,10 +1,10 @@
 from __future__ import annotations
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 # --- Defaults for environment-dependent settings ---
 DEFAULT_MEDIA_ROOT = "/data/media"
@@ -970,6 +970,36 @@ LOG_LLM_CALL = (
 )
 LOG_LLM_CONTENT = "LLM prompt %s, attempt %d, %s message:\n%s"
 LOG_LLM_UNAVAILABLE_RETRY = "LLM server unavailable for prompt %s (%s); retrying in %.0f s"
+DEFAULT_LLM_CONTEXT_TOKENS = 16384
+DEFAULT_LLM_MAX_OUTPUT_TOKENS = 2048
+DEFAULT_LLM_TEMPERATURE = 0.0
+DEFAULT_LLM_SEED = 42
+# Qwen3 reasoning off: the answer is JSON only, and reasoning would use most of the output tokens.
+DEFAULT_LLM_THINK = False
+# HTTP statuses after which the server may answer later: missing model (404), rate limit (429) and server errors.
+LLM_UNAVAILABLE_STATUS_CODES = (404, 429)
+HTTP_SERVER_ERROR_MIN_STATUS = 500
+# Ollama reports an error inside a started stream (e.g. the model runner stopped) with this status.
+OLLAMA_STREAM_ERROR_STATUS = -1
+ERROR_LLM_SERVER_UNAVAILABLE = "The {provider} server at {base_url} is unavailable for model {model!r}: {details}"
+ERROR_LLM_REQUEST_FAILED = "The {provider} server at {base_url} refused the request for model {model!r}: {details}"
+
+
+@dataclass(frozen=True)
+class LLMSettings:
+    """The selected LLM profile after the environment overrides (docs/llm-contract.md §7.5)."""
+
+    profile: str
+    provider: LlmProviderEnum
+    base_url: str
+    model: str
+    context_tokens: int
+    max_output_tokens: int
+    temperature: float
+    seed: int
+    timeout_seconds: float
+    think: bool
+    api_key: Optional[str] = field(default=None, repr=False)  # never logged
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
