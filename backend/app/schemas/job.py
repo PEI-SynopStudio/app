@@ -26,6 +26,7 @@ from app.schemas.enums import (
     JobStepProcessingEnum,
     JobTypeEnum,
 )
+from app.schemas.clips import ClipOptions
 from app.schemas.timecode import parse_time
 
 
@@ -66,7 +67,15 @@ class TranscriptionParams(_StrictModel):
     acoustic_profile: AcousticProfileEnum | None = None
 
 
-JobParameters = Annotated[IngestionParams | TranscriptionParams, Field(discriminator="job_type")]
+class ClipProposalParams(_StrictModel):
+    job_type: Literal["clip_proposal"] = "clip_proposal"
+    transcript_id: UUID
+    options: ClipOptions
+
+
+JobParameters = Annotated[
+    IngestionParams | TranscriptionParams | ClipProposalParams, Field(discriminator="job_type")
+]
 
 
 class JobCreateSchema(_StrictModel):
@@ -96,6 +105,8 @@ class JobRequestMessage(BaseModel):
     staged_file: str | None = None
     file_name: str | None = None
     audio_key: str | None = None
+    # Clip proposals only, set by the API: the transcript snapshot the AI reads (FR11).
+    transcript_key: str | None = None
     time_offset_seconds: float = Field(default=VIDEO_START_SECONDS, ge=VIDEO_START_SECONDS)
     requested_at: datetime = Field(default_factory=_utcnow)
 
