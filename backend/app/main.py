@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import auth, ingestion, jobs, progress, projects, uploads
+from app.api import auth, ingestion, jobs, progress, projects, transcripts, uploads
 from app.api.errors import identity_provider_unavailable, storage_unavailable
 from app.core.config import APP_LOGGER_NAME, APP_TITLE, HEALTH_OK, HEALTH_ROUTE, LOG_FORMAT, get_settings
 from app.database.session import get_session_factory
@@ -12,7 +12,9 @@ from app.services.auth.identity_provider import IdentityProviderError
 from app.services.storage.object_storage import ObjectStorageError, get_object_storage
 from app.services.workflow.event_consumer import JobEventConsumer
 from app.services.workflow.progress_hub import get_progress_hub
+from app.services.workflow.rabbitmq import get_dispatcher
 from app.services.workflow.sweeper import run_periodic_sweep
+from app.services.workflow.transcription_trigger import TranscriptionTrigger
 
 
 def _configure_logging() -> None:
@@ -29,8 +31,11 @@ def _configure_logging() -> None:
 async def _lifespan(_: FastAPI):
     hub = get_progress_hub()
     tasks = [
-        asyncio.create_task(JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub).run()),
+        asyncio.create_task(
+            JobEventConsumer(get_settings().rabbitmq_url, get_session_factory(), hub, get_object_storage).run()
+        ),
         asyncio.create_task(run_periodic_sweep(get_session_factory(), get_object_storage, hub)),
+        asyncio.create_task(TranscriptionTrigger(get_settings().rabbitmq_url, get_session_factory(), get_dispatcher()).run()),
     ]
     yield
     for task in tasks:
@@ -48,6 +53,7 @@ app.include_router(ingestion.router)
 app.include_router(uploads.router)
 app.include_router(jobs.router)
 app.include_router(progress.router)
+app.include_router(transcripts.router)
 
 @app.get(HEALTH_ROUTE)
 def health():

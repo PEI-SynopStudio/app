@@ -2,12 +2,13 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage
 from aio_pika.exceptions import CONNECTION_EXCEPTIONS
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -20,13 +21,15 @@ from app.core.config import (
     LOG_EVENT_NOT_APPLIED,
     LOG_EVENT_UNKNOWN_JOB,
     MEDIA_INGESTED_EVENT,
+    TRANSCRIPT_READY_EVENT,
     ApplyOutcome,
     JobStatusEnum,
     JobTypeEnum,
 )
 from app.core.exceptions import JobNotFoundError
-from app.database.models import Job
+from app.database.models import Job, Transcript
 from app.schemas.job import JobStatusResponseSchema, JobUpdateEventSchema
+from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
 from app.services.video.metadata import IngestionOutput
 from app.services.workflow.jobs import apply_job_event
 from app.services.workflow.progress_hub import JobProgressHub
@@ -46,15 +49,34 @@ class MediaIngestedEvent(BaseModel):
     occurred_at: datetime
 
 
-# Apply the events of the workers to the database and announce the finished ingestions.
+class TranscriptReadyEvent(BaseModel):
+    event: str = TRANSCRIPT_READY_EVENT
+    job_id: uuid.UUID
+    project_id: uuid.UUID
+    media_asset_id: uuid.UUID
+    transcript_id: uuid.UUID
+    occurred_at: datetime
+
+
+Announcement = Union[MediaIngestedEvent, TranscriptReadyEvent]
+
+
+# Apply the events of the workers to the database and announce the finished ingestions and transcriptions.
 # Source: architecture §2 (workers publish results, the backend persists them); MS2 FR02 – Outputs (event triggers transcription).
 class JobEventConsumer:
     """Runs inside the API process; prefetch 1 applies the events strictly in the order they were published."""
 
-    def __init__(self, url: str, session_factory: sessionmaker[Session], hub: JobProgressHub) -> None:
+    def __init__(
+        self,
+        url: str,
+        session_factory: sessionmaker[Session],
+        hub: JobProgressHub,
+        open_object_storage: Optional[Callable[[], ObjectStorage]] = None,
+    ) -> None:
         self._url = url
         self._session_factory = session_factory
         self._hub = hub
+        self._open_object_storage = open_object_storage
 
     async def run(self) -> None:
         """Runs until cancelled, connecting again whenever the connection is lost.
@@ -80,7 +102,7 @@ class JobEventConsumer:
         await queue.consume(self.handle)
 
     async def handle(self, message: AbstractIncomingMessage) -> None:
-        """Acknowledged only after the database commit and the media.ingested publication."""
+        """Acknowledged only after the database commit and the announcement of a finished job."""
         try:
             event = JobUpdateEventSchema.model_validate_json(message.body)
         except ValidationError:
@@ -89,16 +111,16 @@ class JobEventConsumer:
             return
 
         try:
-            update, ingested = await asyncio.to_thread(self._apply, event)
+            update, announcement = await asyncio.to_thread(self._apply, event)
             if update is not None:
                 self._hub.publish(update)
-            if ingested is not None:
-                await self._publish_media_ingested(ingested)
+            if announcement is not None:
+                await self._announce(announcement)
         except JobNotFoundError:
             # The project was deleted while its job was running.
             logger.warning(LOG_EVENT_UNKNOWN_JOB, event.job_id)
             await message.reject(requeue=False)
-        except (SQLAlchemyError, *CONNECTION_EXCEPTIONS) as exc:
+        except (SQLAlchemyError, ObjectStorageError, *CONNECTION_EXCEPTIONS) as exc:
             # Temporary: back in the queue, and the state machine ignores what was already applied.
             logger.warning(LOG_EVENT_CONSUMER_UNAVAILABLE, exc)
             await asyncio.sleep(EVENT_CONSUMER_RETRY_SECONDS)
@@ -110,19 +132,21 @@ class JobEventConsumer:
         else:
             await message.ack()
 
-    def _apply(
-        self, event: JobUpdateEventSchema
-    ) -> Tuple[Optional[JobStatusResponseSchema], Optional[MediaIngestedEvent]]:
+    def _apply(self, event: JobUpdateEventSchema) -> Tuple[Optional[JobStatusResponseSchema], Optional[Announcement]]:
         """Returns the new state to show, if it changed, and the event to announce.
 
         A repeated completed event announces again; consumers use the job ID.
         """
         with self._session_factory() as db:
-            result = apply_job_event(db, event)
+            result = apply_job_event(db, event, self._open_object_storage)
             job = db.get(Job, event.job_id)
             update = JobStatusResponseSchema.model_validate(job) if result.outcome == ApplyOutcome.APPLIED else None
             completed = event.status == JobStatusEnum.COMPLETED and result.job.status == JobStatusEnum.COMPLETED
-            if not completed or result.job.job_type != JobTypeEnum.INGESTION:
+            if not completed:
+                return update, None
+            if result.job.job_type == JobTypeEnum.TRANSCRIPTION:
+                return update, self._transcript_ready(db, job)
+            if result.job.job_type != JobTypeEnum.INGESTION:
                 return update, None
             output = IngestionOutput.model_validate(result.job.output)
             return update, MediaIngestedEvent(
@@ -133,11 +157,24 @@ class JobEventConsumer:
                 occurred_at=datetime.now(timezone.utc),
             )
 
-    async def _publish_media_ingested(self, event: MediaIngestedEvent) -> None:
+    @staticmethod
+    def _transcript_ready(db: Session, job: Job) -> Optional[TranscriptReadyEvent]:
+        transcript = db.scalar(select(Transcript).where(Transcript.job_id == job.id))
+        if transcript is None:
+            return None
+        return TranscriptReadyEvent(
+            job_id=job.id,
+            project_id=job.project_id,
+            media_asset_id=transcript.media_asset_id,
+            transcript_id=transcript.id,
+            occurred_at=datetime.now(timezone.utc),
+        )
+
+    async def _announce(self, event: Announcement) -> None:
         message = aio_pika.Message(
             body=event.model_dump_json().encode(),
             content_type=BROKER_CONTENT_TYPE,
             message_id=str(event.job_id),
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         )
-        await self._media_events.publish(message, MEDIA_INGESTED_EVENT)
+        await self._media_events.publish(message, event.event)

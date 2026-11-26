@@ -33,7 +33,11 @@ DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS = 6 * 3600
 
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
-DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+DEFAULT_WHISPER_DEVICE = "cpu"
+DEFAULT_WHISPER_COMPUTE_TYPE = "int8"
+DEFAULT_SPEECH_CPU_THREADS = 4
+DEFAULT_SPEECH_MODELS_DIR = "/data/models"
 DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
@@ -90,7 +94,7 @@ WAVEFORM_CONTENT_TYPE = "application/json"
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
 ERROR_PROJECT_NOT_FOUND = "Project not found: {project_id}"
-ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while an ingestion is running."
+ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while a job is running."
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
@@ -141,7 +145,12 @@ PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
-
+TRANSCRIPTS_ROUTE_TAG = "transcripts"
+TRANSCRIPT_ROUTE = "/{project_id}/transcript"
+TRANSCRIPTION_ROUTE = "/{project_id}/transcription"
+ERROR_TRANSCRIPT_NOT_FOUND = "Project {project_id} has no transcript yet."
+ERROR_TRANSCRIPT_RANGE = "end must be after start."
+ERROR_TRANSCRIPT_ALREADY_EXISTS = "The video of project {project_id} is already transcribed."
 
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
@@ -188,6 +197,8 @@ LOG_UPLOAD_DISCARD_FAILED = "Could not discard the rejected upload of project %s
 # --- Job dispatch and events ---
 MEDIA_INGESTED_EVENT = "media.ingested"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
+ERROR_TRANSCRIPTION_ALREADY_RUNNING = "A transcription is already running for project {project_id}."
+ERROR_INGESTION_DURING_TRANSCRIPTION = "The video of project {project_id} cannot be replaced while it is being transcribed."
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
@@ -206,12 +217,20 @@ DEAD_LETTER_MAX_LENGTH = 1000
 DEAD_LETTER_TTL_MS = 7*24*3600*1000
 MEDIA_EVENTS_EXCHANGE = "media_events"
 MEDIA_INGESTED_QUEUE = "media.ingested"
+TRANSCRIPT_READY_EVENT = "transcript.ready"
+TRANSCRIPT_READY_QUEUE = "transcript.ready"
 EVENT_CONSUMER_PREFETCH = 1
 EVENT_CONSUMER_RETRY_SECONDS = 5.0
 LOG_EVENT_CONSUMER_UNAVAILABLE = "Job event consumer cannot reach the broker or the database, retrying: %s"
 LOG_EVENT_INVALID = "Invalid job event discarded: %s"
 LOG_EVENT_UNKNOWN_JOB = "Event for unknown job %s discarded"
 LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
+LOG_MEDIA_EVENT_INVALID = "Invalid media event discarded: %s"
+LOG_TRIGGER_UNAVAILABLE = "Transcription trigger cannot reach the broker or the database, retrying: %s"
+LOG_TRANSCRIPTION_ALREADY_REQUESTED = "Transcription of ingestion job %s already requested; event ignored"
+LOG_TRANSCRIPTION_NOT_STARTED = "Transcription of ingestion job %s not started: %s"
+LOG_TRANSCRIPTION_NO_VIDEO = "Ingestion job %s has no video left to transcribe; event ignored"
+LOG_TRIGGER_FAILED = "Media event of ingestion job %s could not be handled"
 ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
 LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s), %d expired session(s)"
 ERROR_JOB_QUEUED_STALLED = "The job never started processing; please submit it again."
@@ -364,6 +383,60 @@ ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
 ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
 ERROR_KEYFRAME_INDEX_FAILED = "Failed to build the keyframe index: {details}"
 
+# --- Speech processing: faster-whisper and wav2vec2 ---
+# Library defaults made explicit, so every transcript records the exact parameters it was made with.
+WHISPER_BEAM_SIZE = 5
+WHISPER_NO_SPEECH_THRESHOLD = 0.6
+WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4
+WHISPER_LOG_PROB_THRESHOLD = -1.0
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
+WHISPER_VAD_PARAMETERS = {
+    "threshold": 0.5,
+    "min_speech_duration_ms": 0,
+    "min_silence_duration_ms": 2000,
+    "speech_pad_ms": 400,
+}
+TRANSCRIPTION_WINDOW_SECONDS = 600
+ALIGNMENT_MODELS = {
+    "pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+}
+LANGUAGE_SUBTAG_SEPARATOR = "-"
+ALIGNMENT_MODEL_FILES = ("*.json", "*.safetensors", "pytorch_model.bin")
+ERROR_SPEECH_MODEL_UNAVAILABLE = "Speech model {model!r} could not be loaded: {details}"
+ERROR_NO_ALIGNMENT_MODEL = "No alignment model is configured for language {language!r}."
+LOG_SPEECH_MODEL_LOADED = "Speech model %s loaded (revision %s)"
+CONFIDENCE_MIN = 0.0
+CONFIDENCE_MAX = 1.0
+TRANSCRIPT_COUNT_MIN = 0
+SEGMENT_MIN_WORDS = 1
+ERROR_TRANSCRIPT_TIME_ORDER = "Invalid interval: end ({end:.3f} s) is before start ({start:.3f} s)."
+TRANSCRIPTION_CUT_SEARCH_SECONDS = 5.0
+TRANSCRIPTION_CUT_FRAME_SECONDS = 0.02
+TRANSCRIPTION_CUT_PAUSE_SECONDS = 0.2
+PCM_NUMPY_DTYPE = "<i2"
+PCM_SAMPLE_WIDTH_BYTES = 2
+ERROR_UNEXPECTED_WAV_FORMAT = (
+    "Expected a {rate} Hz mono 16-bit WAV, got {actual_rate} Hz, {channels} channel(s), "
+    "{width}-byte samples: {path}"
+)
+WHISPER_MAX_IDENTICAL_SEGMENTS = 2
+ERROR_TRANSCRIPTION_FAILED = "faster-whisper could not transcribe the audio: {details}"
+ALIGNMENT_PAD_SECONDS = 0.5
+ERROR_ALIGNMENT_FAILED = "wav2vec2 could not align the words: {details}"
+TRANSCRIPT_TIME_DECIMALS = 3
+ERROR_NO_SPEECH_DETECTED = "No speech was detected in the audio."
+SPEECH_DIR = "speech"
+TRANSCRIPT_DIR = "transcript"
+TRANSCRIPT_FILE = "transcript.json"
+PARAMETER_WINDOW_SECONDS = "window_seconds"
+PARAMETER_CUT_SEARCH_SECONDS = "cut_search_seconds"
+PARAMETER_CUT_PAUSE_SECONDS = "cut_pause_seconds"
+PARAMETER_MAX_IDENTICAL_SEGMENTS = "max_identical_segments"
+PARAMETER_ALIGNMENT_PAD_SECONDS = "alignment_pad_seconds"
+ERROR_AUDIO_KEY_MISSING = "The job has no audio to transcribe."
+ERROR_TRANSCRIPTION_INTERNAL = "Unexpected error during transcription; see the worker logs."
+LOG_TRANSCRIPTION_FAILED = "Transcription failed for project %s"
+
 
 # --- Asynchronous jobs (T3.13) ---
 class JobTypeEnum(str, Enum):
@@ -407,6 +480,8 @@ class JobErrorCodeEnum(str, Enum):
     SILENT_AUDIO = "silent_audio"
     INTERNAL_ERROR = "internal_error"
     TIMEOUT = "timeout"
+    NO_SPEECH_DETECTED = "no_speech_detected"
+    MODEL_UNAVAILABLE = "model_unavailable"
 
 
 class AcousticProfileEnum(str, Enum):
@@ -444,7 +519,7 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
-# Progress messages shown to the user for each step of each pipeline (FR02 outputs).
+# Progress messages shown to the user for each step of a pipeline (FR02 and FR04 outputs).
 JOB_STEP_MESSAGES = {
     JobTypeEnum.INGESTION: {
         JobStepProcessingEnum.INITIALIZING: "Preparing the video",
@@ -459,7 +534,6 @@ JOB_STEP_MESSAGES = {
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: "Preparing the transcription",
         JobStepProcessingEnum.TRANSCRIBING: "Transcribing the speech",
-        JobStepProcessingEnum.DIARIZING: "Identifying the speakers",
         JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
         JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
         JobStepProcessingEnum.FINISHED: "Transcription completed",
@@ -484,8 +558,7 @@ JOB_STEP_WEIGHTS = {
     },
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
-        JobStepProcessingEnum.TRANSCRIBING: (5.0, 65.0),
-        JobStepProcessingEnum.DIARIZING: (65.0, 90.0),
+        JobStepProcessingEnum.TRANSCRIBING: (5.0, 90.0),
         JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
         JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
         JobStepProcessingEnum.FINISHED: (100.0, 100.0),
@@ -528,6 +601,9 @@ class ProjectStatus(str, Enum):
     INGESTING = "ingesting"
     INGESTED = "ingested"
     INGESTION_FAILED = "ingestion_failed"
+    TRANSCRIBING = "transcribing"
+    TRANSCRIBED = "transcribed"
+    TRANSCRIPTION_FAILED = "transcription_failed"
 
 
 class MediaAssetStatus(str, Enum):
@@ -563,10 +639,22 @@ TABLE_UPLOAD_SESSIONS = "upload_sessions"
 TABLE_JOBS = "jobs"
 TABLE_AUDIT_LOG = "audit_log"
 DB_ON_DELETE_SET_NULL = "SET NULL"
+TABLE_TRANSCRIPTS = "transcripts"
+TABLE_TRANSCRIPT_SEGMENTS = "transcript_segments"
+TABLE_TRANSCRIPT_WORDS = "transcript_words"
+FK_JOB_ID = f"{TABLE_JOBS}.id"
+FK_TRANSCRIPT_ID = f"{TABLE_TRANSCRIPTS}.id"
+FK_TRANSCRIPT_SEGMENT_ID = f"{TABLE_TRANSCRIPT_SEGMENTS}.id"
+TRANSCRIPT_SEGMENTS_TIME_INDEX = "ix_transcript_segments_transcript_id_start_seconds"
+TRANSCRIPT_WORDS_TIME_INDEX = "ix_transcript_words_transcript_id_start_seconds"
+LANGUAGE_CODE_MAX_LENGTH = 16
+MODEL_NAME_MAX_LENGTH = 255
+MODEL_REVISION_MAX_LENGTH = 64
 # A new ingestion replaces the assets in these statuses; uploads still in progress are kept.
 REPLACEABLE_ASSET_STATUSES = (MediaAssetStatus.READY, MediaAssetStatus.FAILED)
 JOB_ACTIVE_STATUSES = (JobStatusEnum.PENDING, JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING)
 JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
+JOB_ACTIVE_TRANSCRIPTION_INDEX = "uq_jobs_one_active_transcription_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
@@ -687,6 +775,9 @@ class AuditAction(str, Enum):
     INGESTION_COMPLETED = "ingestion.completed"
     INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
+    TRANSCRIPTION_REQUESTED = "transcription.requested"
+    TRANSCRIPTION_COMPLETED = "transcription.completed"
+    TRANSCRIPTION_FAILED = "transcription.failed"
     PROJECT_DELETED = "project.deleted"
 
 
@@ -698,6 +789,11 @@ AUDIT_DETAIL_SIZE_BYTES = "size_bytes"
 AUDIT_DETAIL_JOB_ID = "job_id"
 AUDIT_DETAIL_SOURCE = "source"
 AUDIT_DETAIL_ERROR_CODE = "error_code"
+AUDIT_TRANSCRIPTION_FIELDS = {"language", "model_name", "model_revision", "alignment_model_name", "alignment_model_revision", "word_count"}
+ERROR_TRANSCRIPT_COUNT_MISMATCH = (
+    "The stored transcript holds {segments} segment(s) and {words} word(s), "
+    "but the worker reported {expected_segments} and {expected_words}."
+)
 # Fields of a finished ingestion that are copied to its media asset (FR02 step 6).
 ASSET_METADATA_FIELDS = (
     "container",
@@ -747,6 +843,10 @@ class Settings:
     job_download_stalled_after_seconds: int
     log_level: str
     whisper_model: str
+    whisper_device: str
+    whisper_compute_type: str
+    speech_cpu_threads: int
+    speech_models_dir: Path
     default_language: str
     database_url: str
     database_echo: bool
@@ -795,6 +895,10 @@ def get_settings() -> Settings:
         ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        whisper_device=os.environ.get("WHISPER_DEVICE", DEFAULT_WHISPER_DEVICE),
+        whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", DEFAULT_WHISPER_COMPUTE_TYPE),
+        speech_cpu_threads=int(os.environ.get("SPEECH_CPU_THREADS", DEFAULT_SPEECH_CPU_THREADS)),
+        speech_models_dir=Path(os.environ.get("SPEECH_MODELS_DIR", DEFAULT_SPEECH_MODELS_DIR)),
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,

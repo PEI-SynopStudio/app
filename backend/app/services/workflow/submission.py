@@ -6,21 +6,24 @@ from sqlalchemy.orm import Session
 
 from app.core.config import (
     DOWNLOAD_FILE,
+    ERROR_MEDIA_NOT_READY,
     ERROR_STORAGE_UNAVAILABLE,
     REPLACEABLE_ASSET_STATUSES,
+    VIDEO_START_SECONDS,
     JobErrorCodeEnum,
     MediaAssetStatus,
     SourceType,
 )
 from app.database.models import Job, MediaAsset, UploadSession, User
-from app.schemas.job import IngestionParams, JobRequestMessage
+from app.schemas.job import IngestionParams, JobRequestMessage, TranscriptionParams
 from app.schemas.timecode import parse_time
 from app.services.projects.projects import require_ingestion_allowed
 from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorage, ObjectStorageError
+from app.services.video.playback import MediaNotReadyError
 from app.services.video.uploads import close_upload, source_key
 from app.services.workflow.dispatcher import JobDispatcher
-from app.services.workflow.jobs import create_ingestion_job, fail_job, dispatch_job
+from app.services.workflow.jobs import create_ingestion_job, create_transcription_job, dispatch_job, fail_job
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,23 @@ def submit_upload_ingestion(
     dispatch_job(db, dispatcher, job, request)
     close_upload(db, session)
     return job
+
+
+def submit_transcription(
+    db: Session, dispatcher: JobDispatcher, asset: MediaAsset, actor: Optional[User] = None
+) -> Job:
+    if asset.audio_track is None:
+        raise MediaNotReadyError(ERROR_MEDIA_NOT_READY.format(project_id=asset.project_id))
+    params = TranscriptionParams(media_id=asset.id)
+    job = create_transcription_job(db, str(asset.project_id), params, asset.id, actor=actor)
+    request = JobRequestMessage(
+        job_id=job.id,
+        project_id=asset.project_id,
+        parameters=params,
+        audio_key=asset.audio_track.storage_key,
+        time_offset_seconds=asset.time_start_seconds or VIDEO_START_SECONDS,
+    )
+    return dispatch_job(db, dispatcher, job, request)
 
 
 def _replace_previous_assets(db: Session, storage: LocalStorage, object_storage: ObjectStorage, job: Job) -> None:

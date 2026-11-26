@@ -10,10 +10,10 @@ from app.core.config import (
     WS_CLOSE_NOT_AUTHENTICATED,
     WS_CLOSE_PROJECT_NOT_FOUND,
     JobStatusEnum,
+    JobStepProcessingEnum,
     JobTypeEnum,
     LicenseType,
 )
-from app.core.config import JobStatusEnum, JobTypeEnum, LicenseType, JobStepProcessingEnum
 from app.database.models import Job
 from app.database.session import get_session_factory
 from app.main import app

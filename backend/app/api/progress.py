@@ -33,6 +33,7 @@ class NotAuthenticatedError(Exception):
 
 # Send the current state of the project's latest job, then every change while the client stays connected.
 # Only the project's owner may watch; the browser sends the session cookie with the handshake.
+# Source: MS2 FR02 – Outputs (real-time progress notifications to the UI); FR04 plan F5; architecture §1 (WebSockets).
 @router.websocket(PROGRESS_WS_ROUTE)
 async def watch_progress(
     websocket: WebSocket,
