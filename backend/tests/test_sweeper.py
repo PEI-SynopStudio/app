@@ -19,9 +19,10 @@ from app.core.config import (
     get_settings,
 )
 from app.database.base import utc_now
-from app.database.models import AuditLog, Job, MediaAsset, Project, UploadSession
+from app.database.models import AuditLog, AuthSession, Job, MediaAsset, Project, UploadSession
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
+from app.services.auth.auth import create_session
 from app.services.projects.projects import create_project
 from app.services.video.uploads import purge_expired_uploads, start_upload
 from app.services.workflow import sweeper
@@ -51,6 +52,9 @@ def make_project(db):
         authorship_confirmed=True,
     )).id)
 
+def pending_job(db):
+    project_id = make_project(db)
+    return create_ingestion_job(db, project_id, IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
 
 def queued_job(db):
     project_id = make_project(db)
@@ -109,18 +113,7 @@ def test_download_stalled_past_its_limit_is_failed(db):
     assert len(sweep_stalled_jobs(db)) == 1
 
     assert stored(db, job).error_code == JobErrorCodeEnum.TIMEOUT
-
-
-def test_queued_job_is_not_swept(db):
-    """A queued job is only waiting for a free worker."""
-    job = queued_job(db)
-    job.updated_at = utc_now() - timedelta(days=2)
-    db.commit()
-
-    assert len(sweep_stalled_jobs(db)) == 0
-
-    assert stored(db, job).status == JobStatusEnum.QUEUED
-
+    
 
 def test_swept_job_no_longer_blocks_its_project(db):
     job = running_job(db, silent_for=TWO_HOURS)
@@ -191,6 +184,20 @@ def test_a_storage_outage_does_not_hide_the_stalled_jobs(session_factory, db, ob
     assert db.get(UploadSession, session_id) is not None
 
 
+def test_expired_sessions_are_deleted_and_live_ones_kept(session_factory, db, object_storage, user, caplog):
+    live = create_session(db, user, authenticated_at=utc_now())
+    expired = create_session(db, user, authenticated_at=utc_now())
+    expired.session.expires_at = utc_now() - timedelta(seconds=1)
+    db.commit()
+
+    with caplog.at_level(logging.INFO, logger="app"):
+        sweep_once(session_factory, lambda: object_storage)
+
+    db.expire_all()
+    assert db.scalars(select(AuthSession.id)).all() == [live.session.id]
+    assert "1 expired session(s)" in caplog.text
+
+
 def test_clients_watching_are_told_when_a_job_is_swept(session_factory, db, object_storage, monkeypatch):
     monkeypatch.setenv("SWEEP_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
@@ -240,3 +247,46 @@ def test_periodic_sweep_survives_a_failed_round(monkeypatch, caplog):
         get_settings.cache_clear()
 
     assert "sweep failed" in caplog.text
+
+def test_recently_queued_job_not_swept(db):
+    job = queued_job(db)
+    job.updated_at = utc_now() - TWO_HOURS
+    db.commit()
+    
+    assert len(sweep_stalled_jobs(db)) == 0
+    assert stored(db, job).status == JobStatusEnum.QUEUED
+    
+
+def test_queued_job_stalled_past_limit_is_failed(db):
+    job = queued_job(db)
+    job.updated_at = utc_now() - timedelta(days=2)
+    db.commit()
+    
+    assert len(sweep_stalled_jobs(db)) == 1
+    swept = stored(db, job)
+    
+    assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
+    assert "never started" in swept.error_message
+    assert create_ingestion_job(db, str(job.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL) is not None
+
+
+def test_recently_pending_job_not_swept(db):
+    job = pending_job(db)
+    job.updated_at = utc_now() - TWO_HOURS
+    db.commit()
+
+    assert len(sweep_stalled_jobs(db)) == 0
+    assert stored(db, job).status == JobStatusEnum.PENDING
+
+
+def test_pending_job_stalled_past_limit_is_failed(db):
+    job = pending_job(db)
+    job.updated_at = utc_now() - timedelta(days=2)
+    db.commit()
+
+    assert len(sweep_stalled_jobs(db)) == 1
+    swept = stored(db, job)
+
+    assert (swept.status, swept.error_code) == (JobStatusEnum.FAILED, JobErrorCodeEnum.TIMEOUT)
+    assert "never started" in swept.error_message
+    assert create_ingestion_job(db, str(job.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL) is not None

@@ -3,17 +3,20 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.core.config import JobStatusEnum, JobTypeEnum, MediaAssetStatus, SourceType
+from app.core.config import AuditAction, JobStatusEnum, JobTypeEnum, MediaAssetStatus, SourceType
 from app.core.exceptions import JobDispatchError
-from app.database.models import AudioTrack, Job, MediaAsset
+from app.database.models import AudioTrack, AuditLog, Job, MediaAsset
 from app.main import app
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import get_object_storage
 from app.services.video.sources import RemoteVideoInfo
 from app.services.workflow import ingestion_pipeline
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.rabbitmq import get_dispatcher
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage
 from in_process_dispatcher import InProcessDispatcher
 
@@ -51,16 +54,16 @@ def dispatcher():
 
 
 @pytest.fixture
-def client(storage, dispatcher, db_override):
+def client(storage, dispatcher, db_override, session_factory, user):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = InMemoryObjectStorage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def live(storage, db_override, session_factory):
+def live(storage, db_override, session_factory, user):
     """Client wired to the in-process stand-in; yields (client, dispatcher, published events)."""
     events = []
     object_storage = InMemoryObjectStorage()
@@ -68,7 +71,7 @@ def live(storage, db_override, session_factory):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = lambda: object_storage
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app), dispatcher, events
+    yield sign_in(TestClient(app), session_factory, user), dispatcher, events
     dispatcher.join(JOIN_TIMEOUT_SECONDS)
     app.dependency_overrides.clear()
 
@@ -161,6 +164,15 @@ def test_url_ingestion_with_invalid_project_id_is_rejected(client):
     response = client.post("/projects/not-a-uuid/ingestions/url", json={"url": SAMPLE_URL})
 
     assert response.status_code == 422
+
+
+def test_url_ingestion_records_who_asked_for_it(client, db, user):
+    project_id = new_project(client)
+
+    client.post(f"/projects/{project_id}/ingestions/url", json={"url": SAMPLE_URL})
+
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == AuditAction.INGESTION_REQUESTED))
+    assert entry.actor_hash == actor_hash(user.id)
 
 
 def test_second_ingestion_while_running_is_conflict(client):

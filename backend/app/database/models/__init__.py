@@ -5,10 +5,12 @@ from app.database.models.media_asset import MediaAsset
 from app.database.models.project import Project
 from app.database.models.transcript import Transcript, TranscriptSegment, TranscriptWord
 from app.database.models.upload_session import UploadSession
+from app.database.models.user import AuthSession, User
 
 __all__ = [
     "AudioTrack",
     "AuditLog",
+    "AuthSession",
     "Job",
     "MediaAsset",
     "Project",
@@ -16,4 +18,5 @@ __all__ = [
     "TranscriptSegment",
     "TranscriptWord",
     "UploadSession",
+    "User",
 ]

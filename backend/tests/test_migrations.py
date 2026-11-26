@@ -52,8 +52,46 @@ def insert_entry(engine, age=timedelta()):
     return entry_id
 
 
+INSERT_USER_AT_0007 = text(
+    "INSERT INTO users (id, subject, email, name, password_hash, age_group, is_active, is_admin, failed_login_count, "
+    "created_at, updated_at) VALUES (:id, :subject, :email, 'Ana', :password_hash, 'adult', true, false, 0, :now, :now)"
+)
+INSERT_SESSION_AT_0007 = text(
+    "INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at, authenticated_at) "
+    "VALUES (:id, :user_id, :token_hash, :now, :now, :authenticated_at)"
+)
+
+
 def test_migrations_match_the_models(alembic_config):
     command.check(alembic_config)
+
+
+def test_accounts_and_sessions_from_before_keycloak_are_removed(alembic_config, engine):
+    command.downgrade(alembic_config, "0007")
+    old_account, keycloak_account = str(uuid.uuid4()), str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(INSERT_USER_AT_0007, {
+            "id": old_account, "subject": None, "email": "old@example.com", "password_hash": "$argon2id$", "now": utc_now()
+        })
+        connection.execute(INSERT_USER_AT_0007, {
+            "id": keycloak_account, "subject": "subject-1", "email": "ana@example.com", "password_hash": None,
+            "now": utc_now(),
+        })
+        for user_id, token_hash, authenticated_at in [
+            (old_account, "a" * 64, utc_now()),
+            (keycloak_account, "b" * 64, None),
+            (keycloak_account, "c" * 64, utc_now()),
+        ]:
+            connection.execute(INSERT_SESSION_AT_0007, {
+                "id": str(uuid.uuid4()), "user_id": user_id, "token_hash": token_hash, "now": utc_now(),
+                "authenticated_at": authenticated_at,
+            })
+
+    command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        assert connection.scalars(text("SELECT email FROM users")).all() == ["ana@example.com"]
+        assert connection.scalars(text("SELECT token_hash FROM auth_sessions")).all() == ["c" * 64]
 
 
 def test_uploads_in_progress_are_discarded_when_the_chunks_move_to_object_storage(alembic_config, engine):

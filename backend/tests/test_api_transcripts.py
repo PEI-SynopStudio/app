@@ -2,14 +2,18 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.core.config import JobErrorCodeEnum
+from app.core.config import AuditAction, JobErrorCodeEnum
 from app.core.exceptions import JobDispatchError
+from app.database.models import AuditLog, Project
 from app.main import app
 from app.schemas.job import TranscriptionParams
+from app.services.auth.auth import actor_hash
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.jobs import apply_job_event, create_transcription_job, fail_job, queue_job
 from app.services.workflow.rabbitmq import get_dispatcher
+from conftest import add_user, sign_in
 from test_submission import dispatcher, finished_asset, make_project, storage  # noqa: F401
 from test_transcription_results import completed, transcription  # noqa: F401
 
@@ -19,16 +23,23 @@ class UnreachableBroker(JobDispatcher):
         raise JobDispatchError("The job could not be queued; please try again.")
 
 
+def own(db, project_id, user):
+    """Give the project to the signed-in test user, so the API lets the client reach it."""
+    db.get(Project, uuid.UUID(project_id)).owner_id = str(user.id)
+    db.commit()
+    return project_id
+
+
 @pytest.fixture
-def client(db_override, dispatcher):
+def client(db_override, dispatcher, session_factory, user):
     app.dependency_overrides[get_dispatcher] = lambda: dispatcher
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def failed(db, storage):
-    project_id = make_project(db)
+def failed(db, storage, user):
+    project_id = own(db, make_project(db), user)
     asset, _ = finished_asset(db, storage, project_id)
     job = queue_job(db, create_transcription_job(db, project_id, TranscriptionParams(media_id=asset.id), asset.id))
     fail_job(db, job, JobErrorCodeEnum.MODEL_UNAVAILABLE, "no weights")
@@ -36,10 +47,10 @@ def failed(db, storage):
 
 
 @pytest.fixture
-def stored(db, transcription):
+def stored(db, transcription, user):
     job, object_storage = transcription
     apply_job_event(db, completed(job), lambda: object_storage)
-    return str(job.project_id)
+    return own(db, str(job.project_id), user)
 
 
 def test_the_whole_transcript_is_returned_with_its_models(client, stored):
@@ -72,8 +83,8 @@ def test_an_invalid_range_is_rejected(client, stored, query):
     assert client.get(f"/projects/{stored}/transcript?{query}").status_code == 422
 
 
-def test_a_project_without_transcript_is_not_found(client, db):
-    project_id = make_project(db)
+def test_a_project_without_transcript_is_not_found(client, db, user):
+    project_id = own(db, make_project(db), user)
 
     response = client.get(f"/projects/{project_id}/transcript")
 
@@ -116,15 +127,15 @@ def test_a_video_already_transcribed_is_conflict(client, stored):
     assert "already transcribed" in response.json()["detail"]
 
 
-def test_a_project_without_licence_is_forbidden(client, db, storage):
-    project_id = make_project(db, licence=False)
+def test_a_project_without_licence_is_forbidden(client, db, storage, user):
+    project_id = own(db, make_project(db, licence=False), user)
     finished_asset(db, storage, project_id)
 
     assert client.post(f"/projects/{project_id}/transcription").status_code == 403
 
 
-def test_a_project_without_a_finished_video_is_not_found(client, db):
-    project_id = make_project(db)
+def test_a_project_without_a_finished_video_is_not_found(client, db, user):
+    project_id = own(db, make_project(db), user)
 
     assert client.post(f"/projects/{project_id}/transcription").status_code == 404
 
@@ -134,3 +145,28 @@ def test_an_unreachable_broker_answers_503(client, failed):
     app.dependency_overrides[get_dispatcher] = UnreachableBroker
 
     assert client.post(f"/projects/{project_id}/transcription").status_code == 503
+
+
+def test_the_transcript_needs_a_signed_in_user(client, stored):
+    client.cookies.clear()
+
+    assert client.get(f"/projects/{stored}/transcript").status_code == 401
+    assert client.post(f"/projects/{stored}/transcription").status_code == 401
+
+
+def test_another_users_project_is_not_found(client, db, session_factory, stored):
+    other = add_user(session_factory, subject="subject-2", email="other@example.com", name="Other")
+    own(db, stored, other)
+
+    assert client.get(f"/projects/{stored}/transcript").status_code == 404
+    assert client.post(f"/projects/{stored}/transcription").status_code == 404
+
+
+def test_the_request_is_recorded_with_the_user(client, db, user, failed):
+    project_id, _ = failed
+
+    client.post(f"/projects/{project_id}/transcription")
+
+    query = select(AuditLog).where(AuditLog.action == AuditAction.TRANSCRIPTION_REQUESTED)
+    entry = db.scalars(query.order_by(AuditLog.created_at.desc())).first()
+    assert entry.actor_hash == actor_hash(user.id)

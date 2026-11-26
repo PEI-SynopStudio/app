@@ -6,7 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.core.config import JobStatusEnum, JobTypeEnum, LicenseType
+from app.core.config import (
+    WS_CLOSE_NOT_AUTHENTICATED,
+    WS_CLOSE_PROJECT_NOT_FOUND,
+    JobStatusEnum,
+    JobStepProcessingEnum,
+    JobTypeEnum,
+    LicenseType,
+)
 from app.database.models import Job
 from app.database.session import get_session_factory
 from app.main import app
@@ -15,6 +22,7 @@ from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
+from conftest import add_user, sign_in
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
@@ -25,15 +33,15 @@ def hub():
 
 
 @pytest.fixture
-def client(session_factory, hub):
+def client(session_factory, hub, user):
     app.dependency_overrides[get_session_factory] = lambda: session_factory
     app.dependency_overrides[get_progress_hub] = lambda: hub
     with TestClient(app) as test_client:
-        yield test_client
+        yield sign_in(test_client, session_factory, user)
     app.dependency_overrides.clear()
 
 
-def make_project(db):
+def make_project(db, owner):
     return create_project(db, ProjectCreate(
         title="Debate",
         author="University of Aveiro",
@@ -43,7 +51,7 @@ def make_project(db):
         copyright_notice="CC BY 4.0",
         licence_confirmed=True,
         authorship_confirmed=True,
-    )).id
+    ), owner).id
 
 
 def update_for(project_id, progress=10.0):
@@ -64,8 +72,8 @@ def publish(client, hub, update):
     client.portal.call(hub.publish, update)
 
 
-def test_a_new_connection_receives_the_current_state(client, db):
-    project_id = make_project(db)
+def test_a_new_connection_receives_the_current_state(client, db, user):
+    project_id = make_project(db, user)
     job = queue_job(db, create_ingestion_job(db, str(project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL))
 
     with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
@@ -74,21 +82,8 @@ def test_a_new_connection_receives_the_current_state(client, db):
     assert (state["job_id"], state["status"]) == (str(job.id), "queued")
 
 
-def test_a_new_connection_receives_the_latest_job_of_any_type(client, db):
-    project_id = make_project(db)
-    queue_job(db, create_ingestion_job(db, str(project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL))
-    transcription = Job(project_id=project_id, job_type=JobTypeEnum.TRANSCRIPTION, status=JobStatusEnum.QUEUED, parameters={})
-    db.add(transcription)
-    db.commit()
-
-    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
-        state = websocket.receive_json()
-
-    assert (state["job_id"], state["job_type"]) == (str(transcription.id), "transcription")
-
-
-def test_updates_are_sent_while_connected(client, db, hub):
-    project_id = make_project(db)
+def test_updates_are_sent_while_connected(client, db, hub, user):
+    project_id = make_project(db, user)
 
     with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
         publish(client, hub, update_for(project_id, 25.0))
@@ -97,8 +92,8 @@ def test_updates_are_sent_while_connected(client, db, hub):
         assert websocket.receive_json()["progress"] == 60.0
 
 
-def test_a_connection_only_receives_its_own_project(client, db, hub):
-    project_id, other_project_id = make_project(db), make_project(db)
+def test_a_connection_only_receives_its_own_project(client, db, hub, user):
+    project_id, other_project_id = make_project(db, user), make_project(db, user)
 
     with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
         publish(client, hub, update_for(other_project_id, 99.0))
@@ -107,8 +102,8 @@ def test_a_connection_only_receives_its_own_project(client, db, hub):
         assert websocket.receive_json()["project_id"] == str(project_id)
 
 
-def test_messages_from_the_client_are_ignored(client, db, hub):
-    project_id = make_project(db)
+def test_messages_from_the_client_are_ignored(client, db, hub, user):
+    project_id = make_project(db, user)
 
     with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
         websocket.send_text("hello")
@@ -127,8 +122,28 @@ def test_unknown_project_is_closed_with_a_clear_code(client, project_id):
     assert closed.value.code == 4404
 
 
-def test_disconnecting_removes_the_watcher(client, db, hub):
-    project_id = make_project(db)
+def closing_code(client, project_id):
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+    return closed.value.code
+
+
+def test_progress_needs_a_signed_in_user(client, db, user):
+    project_id = make_project(db, user)
+    client.cookies.clear()
+
+    assert closing_code(client, project_id) == WS_CLOSE_NOT_AUTHENTICATED
+
+
+def test_progress_of_someone_elses_project_is_not_found(client, db, session_factory):
+    other = add_user(session_factory, subject="subject-2", email="other@example.com", name="Other")
+
+    assert closing_code(client, make_project(db, other)) == WS_CLOSE_PROJECT_NOT_FOUND
+
+
+def test_disconnecting_removes_the_watcher(client, db, hub, user):
+    project_id = make_project(db, user)
 
     with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
         publish(client, hub, update_for(project_id))
@@ -154,3 +169,36 @@ def test_publishing_without_watchers_does_nothing(hub):
     hub.publish(update_for(uuid.uuid4()))
 
     assert hub._watchers == {}
+
+
+def test_a_new_connection_receives_the_latest_job_of_any_type(client, db, user):
+    project_id = make_project(db, user)
+    job = Job(
+        project_id=project_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.PROCESSING,
+        step=JobStepProcessingEnum.TRANSCRIBING,
+        step_progress=40.0,
+        progress=29.0,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(job)
+    db.commit()
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        state = websocket.receive_json()
+
+    assert state["job_id"] == str(job.id)
+    assert state["job_type"] == "transcription"
+    assert state["step"] == "transcribing"
+    assert state["message"] == "Transcribing the speech"
+
+
+def test_a_project_without_jobs_sends_no_initial_state(client, db, hub, user):
+    project_id = make_project(db, user)
+
+    with client.websocket_connect(f"/projects/{project_id}/progress") as websocket:
+        publish(client, hub, update_for(project_id, 25.0))
+        first = websocket.receive_json()
+
+    assert first["progress"] == 25.0

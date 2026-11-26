@@ -161,3 +161,95 @@ def db_override(session_factory):
             yield session
 
     app.dependency_overrides[get_db] = override
+
+
+def add_user(session_factory, subject="subject-1", email="owner@example.com", name="Owner"):
+    """An account as the first Keycloak sign-in creates it."""
+    from app.services.auth.auth import provision_user
+    from fake_identity_provider import make_claims
+
+    with session_factory() as session:
+        return provision_user(session, make_claims(subject=subject, email=email, name=name))
+
+
+@pytest.fixture
+def user(session_factory):
+    """The account the API clients of the tests are signed in as."""
+    return add_user(session_factory)
+
+
+def sign_in(client, session_factory, user, authenticated_at=None):
+    """Give the test client a session cookie of `user`, as a browser has right after signing in at Keycloak."""
+    from app.core.config import SESSION_COOKIE_NAME
+    from app.database.base import utc_now
+    from app.services.auth.auth import create_session
+
+    with session_factory() as session:
+        new = create_session(
+            session, user, idp_session_id="idp-session-1", authenticated_at=authenticated_at or utc_now()
+        )
+        client.cookies.set(SESSION_COOKIE_NAME, new.token)
+    return client
+
+
+@pytest.fixture
+def identity_provider():
+    """Keycloak replaced by a fake for the API; the client fixtures clear the override."""
+    from app.main import app
+    from app.services.auth.keycloak import get_identity_provider
+    from fake_identity_provider import FakeIdentityProvider
+
+    fake = FakeIdentityProvider()
+    app.dependency_overrides[get_identity_provider] = lambda: fake
+    return fake
+
+
+@pytest.fixture
+def queues(monkeypatch):
+    """Exchanges and queues of this test only, removed at the end; skipped without a broker."""
+    import asyncio
+    import uuid
+
+    import aio_pika
+
+    from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
+    from test_rabbitmq import TEST_RABBITMQ_URL, broker_is_running
+
+    if not broker_is_running():
+        pytest.skip("RabbitMQ is not available; run 'docker compose up -d rabbitmq' first")
+    prefix = f"test-{uuid.uuid4().hex}"
+    names = {
+        "JOBS_EXCHANGE": f"{prefix}-jobs",
+        "JOBS_QUEUE_FORMAT": f"{prefix}-jobs.{{job_type}}",
+        "JOB_EVENTS_EXCHANGE": f"{prefix}-events",
+        "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
+        "DEAD_LETTER_EXCHANGE": f"{prefix}-dlx",
+        "DEAD_LETTER_QUEUE": f"{prefix}-dlq",
+        "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
+        "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
+    }
+    for constant, value in names.items():
+        monkeypatch.setattr(rabbitmq_module, constant, value)
+    monkeypatch.setattr(event_consumer, "EVENT_CONSUMER_RETRY_SECONDS", 0.05)
+    yield names
+
+    async def remove():
+        connection = await aio_pika.connect(TEST_RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            for queue in (
+                names["JOBS_QUEUE_FORMAT"].format(job_type="ingestion"),
+                names["JOB_EVENTS_QUEUE"],
+                names["MEDIA_INGESTED_QUEUE"],
+                names["DEAD_LETTER_QUEUE"],
+            ):
+                await channel.queue_delete(queue)
+            for exchange in (
+                names["JOBS_EXCHANGE"],
+                names["JOB_EVENTS_EXCHANGE"],
+                names["MEDIA_EVENTS_EXCHANGE"],
+                names["DEAD_LETTER_EXCHANGE"],
+            ):
+                await channel.exchange_delete(exchange)
+
+    asyncio.run(remove())

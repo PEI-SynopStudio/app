@@ -12,6 +12,10 @@ from app.schemas.job import (
     JobRequestMessage,
     JobCreateSchema
 )
+from app.core.config import (
+    JOB_STEP_WEIGHTS,
+    JOB_STEP_MESSAGES,
+)
 from app.schemas.timecode import parse_time
 
 URL = "https://youtu.be/SdfR7TuJdlc?si=zvxHtwpH2raXzsau"
@@ -176,15 +180,54 @@ def test_client_cannot_send_internal_upload_fields():
         )
 
 
-def test_step_message_belongs_to_the_pipeline():
-    now = datetime.now(timezone.utc)
 
-    def job(job_type, step):
-        return JobStatusResponseSchema(
-            job_id=uuid4(), project_id=uuid4(), job_type=job_type, status=JobStatusEnum.PROCESSING,
-            step=step, created_at=now, updated_at=now,
-        )
+# =====================================================================
+# 7. PROGRESS MESSAGES
+# =====================================================================
+def _response(**kw):
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    base = dict(
+        job_id=uuid4(), project_id=uuid4(), job_type=JobTypeEnum.INGESTION,
+        status=JobStatusEnum.PROCESSING, step=None, created_at=now, updated_at=now,
+    )
+    return JobStatusResponseSchema(**{**base, **kw})
 
-    assert job(JobTypeEnum.INGESTION, JobStepProcessingEnum.FINISHED).message == "Ingestion completed"
-    assert job(JobTypeEnum.TRANSCRIPTION, JobStepProcessingEnum.FINISHED).message == "Transcription completed"
-    assert job(JobTypeEnum.TRANSCRIPTION, JobStepProcessingEnum.TRANSCRIBING).message == "Transcribing audio"
+
+def test_messages_cover_every_pipeline():
+    assert set(JOB_STEP_MESSAGES) == set(JOB_STEP_WEIGHTS)
+    for job_type, weights in JOB_STEP_WEIGHTS.items():
+        assert set(JOB_STEP_MESSAGES[job_type]) == set(weights)
+        assert all(text.strip() for text in JOB_STEP_MESSAGES[job_type].values())
+
+
+def test_message_ingestion_step():
+    response = _response(step=JobStepProcessingEnum.EXTRACTING_AUDIO)
+    assert response.message == "Extracting audio"
+
+
+def test_message_transcription_step():
+    response = _response(job_type=JobTypeEnum.TRANSCRIPTION, step=JobStepProcessingEnum.TRANSCRIBING)
+    assert response.message == "Transcribing the speech"
+
+
+def test_message_depends_on_job_type():
+    ingestion = _response(step=JobStepProcessingEnum.INITIALIZING)
+    transcription = _response(job_type=JobTypeEnum.TRANSCRIPTION, step=JobStepProcessingEnum.INITIALIZING)
+    assert ingestion.message != transcription.message
+
+
+def test_message_when_finished():
+    ingestion = _response(status=JobStatusEnum.COMPLETED, step=JobStepProcessingEnum.FINISHED)
+    transcription = _response(
+        job_type=JobTypeEnum.TRANSCRIPTION, status=JobStatusEnum.COMPLETED, step=JobStepProcessingEnum.FINISHED
+    )
+    assert ingestion.message == "Ingestion completed"
+    assert transcription.message == "Transcription completed"
+
+
+def test_message_without_step():
+    assert _response(status=JobStatusEnum.PENDING).message is None
+
+
+def test_message_step_outside_pipeline():
+    assert _response(step=JobStepProcessingEnum.TRANSCRIBING).message is None

@@ -1,0 +1,160 @@
+/* =========================================================
+   Clip transcripts (clip page and viewer)
+   ========================================================= */
+
+.transcript {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.transcript__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript__title {
+  font-size: 1.125rem;
+  letter-spacing: -0.02em;
+}
+
+.transcript__lang {
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.transcript__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.transcript__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--fill-strong);
+}
+
+.transcript__tab {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 0.875rem;
+  color: var(--muted);
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-quick) var(--ease-out),
+    color var(--dur-quick) var(--ease-out),
+    box-shadow var(--dur-quick) var(--ease-out);
+}
+
+.transcript__tab:hover {
+  color: var(--fg);
+}
+
+.transcript__tab[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow:
+    0 1px 2px rgb(17 17 17 / 0.08),
+    0 0 0 1px var(--line);
+}
+
+.transcript__hint {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* position: relative so each line's offsetTop is measured from the list (auto-scroll) */
+.transcript__list {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  max-height: 360px;
+  margin: 0 -8px;
+  padding: 0 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* Each line: the time range (and who speaks), then what is said or seen */
+.transcript__line {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--dur-quick) var(--ease-out),
+    box-shadow var(--dur-quick) var(--ease-out);
+}
+
+/* Orange text fails contrast on white, so the current line gets an orange bar instead */
+.transcript__line.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+
+.transcript__stamp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.transcript__time {
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  transition: background-color var(--dur-quick) var(--ease-out);
+}
+
+.transcript__time:hover {
+  background: var(--fill-strong);
+}
+
+.transcript__speaker {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.transcript__text {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--muted);
+  transition: color var(--dur-quick) var(--ease-out);
+}
+
+.transcript__line.is-active .transcript__text {
+  color: var(--fg);
+}
+
+.transcript__note {
+  font-size: 0.75rem;
+  color: var(--subtle);
+}
+
+@media (max-width: 520px) {
+  .transcript {
+    padding: 16px;
+  }
+
+  .transcript__tab {
+    padding: 0 6px;
+    font-size: 0.8125rem;
+  }
+}

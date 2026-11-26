@@ -10,7 +10,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, LicenseType, MediaAssetStatus, SourceType
+from app.core.config import (
+    JobErrorCodeEnum,
+    JobStatusEnum,
+    JobStepProcessingEnum,
+    JobTypeEnum,
+    LicenseType,
+    MediaAssetStatus,
+    SourceType,
+)
 from app.database.models import Job, MediaAsset, Transcript
 from app.schemas.job import IngestionParams, JobRequestMessage, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
@@ -19,7 +27,7 @@ from app.services.storage.local import LocalStorage
 from app.services.storage.object_storage import ObjectStorageError
 from app.services.workflow import event_consumer, rabbitmq as rabbitmq_module
 from app.services.workflow.event_consumer import JobEventConsumer
-from app.services.workflow.jobs import create_ingestion_job, queue_job
+from app.services.workflow.jobs import create_ingestion_job, queue_job, cancel_job
 from app.services.workflow.progress_hub import JobProgressHub
 from in_memory_object_storage import InMemoryObjectStorage
 from app.services.workflow.rabbitmq import RabbitMQDispatcher
@@ -43,6 +51,8 @@ def queues(monkeypatch):
         "JOBS_QUEUE_FORMAT": f"{prefix}-jobs.{{job_type}}",
         "JOB_EVENTS_EXCHANGE": f"{prefix}-events",
         "JOB_EVENTS_QUEUE": f"{prefix}-events.queue",
+        "DEAD_LETTER_EXCHANGE": f"{prefix}-dlx",
+        "DEAD_LETTER_QUEUE": f"{prefix}-dlq",
         "MEDIA_EVENTS_EXCHANGE": f"{prefix}-media",
         "MEDIA_INGESTED_QUEUE": f"{prefix}-media.ingested",
         "TRANSCRIPT_READY_QUEUE": f"{prefix}-transcript.ready",
@@ -61,9 +71,15 @@ def queues(monkeypatch):
                 names["JOB_EVENTS_QUEUE"],
                 names["MEDIA_INGESTED_QUEUE"],
                 names["TRANSCRIPT_READY_QUEUE"],
+                names["DEAD_LETTER_QUEUE"],
             ):
                 await channel.queue_delete(queue)
-            for exchange in (names["JOBS_EXCHANGE"], names["JOB_EVENTS_EXCHANGE"], names["MEDIA_EVENTS_EXCHANGE"]):
+            for exchange in (
+                names["JOBS_EXCHANGE"], 
+                names["JOB_EVENTS_EXCHANGE"], 
+                names["MEDIA_EVENTS_EXCHANGE"],
+                names["DEAD_LETTER_EXCHANGE"],
+            ):
                 await channel.exchange_delete(exchange)
 
     asyncio.run(remove())
@@ -230,13 +246,26 @@ def test_failed_job_announces_nothing(queues, session_factory, job):
 
 def test_invalid_and_unknown_events_do_not_stop_the_consumer(queues, session_factory, job, caplog):
     job_id = job.id
-    events = [b"not an event", progress_event(uuid.uuid4()).model_dump_json().encode(), progress_event(job_id).model_dump_json().encode()]
+    unknown = progress_event(uuid.uuid4()).model_dump_json().encode()
+    events = [b"not an event", unknown, progress_event(job_id).model_dump_json().encode()]
 
     with caplog.at_level(logging.WARNING):
         consume(session_factory, events, status_is(session_factory, job_id, JobStatusEnum.PROCESSING))
 
     assert "Invalid job event" in caplog.text
     assert "unknown job" in caplog.text
+    
+    async def read_dlq():
+        connection = await aio_pika.connect(TEST_RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            queue = await channel.declare_queue(queues["DEAD_LETTER_QUEUE"], durable=True, passive=True)
+            bodies = []
+            while (message := await queue.get(no_ack=True, fail=False, timeout=2)) is not None:
+                bodies.append(message.body)
+            return bodies
+            
+    assert asyncio.run(read_dlq()) == [b"not an event", unknown]
 
 
 def test_event_is_applied_after_a_database_failure(queues, session_factory, job, monkeypatch):
@@ -290,3 +319,79 @@ def test_consumer_keeps_trying_while_the_broker_is_down(monkeypatch, caplog):
         asyncio.run(run())
 
     assert "cannot reach the broker" in caplog.text
+
+def test_transcription_job_lifecycle_e2e(queues, session_factory, transcription):
+    job, object_storage = transcription
+    job_id, project_id = job.id, job.project_id
+
+    events = [
+        JobUpdateEventSchema(
+            job_id=job_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.TRANSCRIBING, step_progress=50
+        ),
+        completed(job),
+    ]
+    hub = JobProgressHub()
+    with hub.watch(project_id) as updates:
+        consume(
+            session_factory,
+            [event.model_dump_json().encode() for event in events],
+            status_is(session_factory, job_id, JobStatusEnum.COMPLETED),
+            hub,
+            open_object_storage=lambda: object_storage,
+        )
+        latest_ws_update = updates.get_nowait()
+
+    with session_factory() as check_db:
+        stored = check_db.get(Job, job_id)
+        assert stored.status == JobStatusEnum.COMPLETED
+        assert stored.step == JobStepProcessingEnum.FINISHED
+        assert stored.progress == 100.0
+        assert stored.started_at is not None
+        assert stored.finished_at is not None
+        assert check_db.scalar(select(Transcript.id)) is not None
+
+    assert latest_ws_update.status == JobStatusEnum.COMPLETED
+    assert latest_ws_update.message == "Transcription completed"
+    assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []
+
+
+def test_late_worker_events_after_cancellation_are_ignored_e2e(queues, session_factory, db, job):
+    job_id, project_id = job.id, job.project_id
+    cancel_job(db, str(project_id), str(job_id))
+
+    late_progress = progress_event(job_id, percent=80.0).model_dump_json().encode()
+    late_completed = JobUpdateEventSchema(
+        job_id=job_id, status=JobStatusEnum.COMPLETED, step_progress=100, output={"ignored": True}
+    ).model_dump_json().encode()
+
+    # Follow with a second job's event so consume() knows the consumer processed everything before it.
+    other_job = Job(
+        project_id=project_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        status=JobStatusEnum.QUEUED,
+        parameters={"job_type": "transcription", "media_id": str(uuid.uuid4()), "language": "pt"},
+    )
+    db.add(other_job)
+    db.commit()
+    other_id = other_job.id
+    marker_event = JobUpdateEventSchema(
+        job_id=other_id, status=JobStatusEnum.PROCESSING, step=JobStepProcessingEnum.TRANSCRIBING, step_progress=10
+    ).model_dump_json().encode()
+
+    hub = JobProgressHub()
+    with hub.watch(project_id) as updates:
+        consume(
+            session_factory,
+            [late_progress, late_completed, marker_event],
+            status_is(session_factory, other_id, JobStatusEnum.PROCESSING),
+            hub,
+        )
+        ws_update = updates.get_nowait()
+
+    with session_factory() as check_db:
+        cancelled_job = check_db.get(Job, job_id)
+        assert cancelled_job.status == JobStatusEnum.CANCELLED
+        assert cancelled_job.output is None
+
+    assert ws_update.job_id == other_id
+    assert read_media_ingested(queues["MEDIA_INGESTED_QUEUE"]) == []

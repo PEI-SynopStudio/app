@@ -10,7 +10,7 @@ from app.core.config import (
     ERROR_TRANSCRIPT_RANGE,
     MediaAssetStatus,
 )
-from app.database.models import Job, MediaAsset, Transcript, TranscriptSegment
+from app.database.models import Job, MediaAsset, Transcript, TranscriptSegment, User
 from app.schemas import transcript as schema
 from app.services.projects.projects import get_project
 from app.services.video.playback import MediaNotReadyError
@@ -53,7 +53,9 @@ def read_transcript(
     )
 
 
-def request_transcription(db: Session, dispatcher: JobDispatcher, project_id: str) -> Job:
+def request_transcription(
+    db: Session, dispatcher: JobDispatcher, project_id: str, actor: Optional[User] = None
+) -> Job:
     project = get_project(db, project_id)
     ready = select(MediaAsset).where(MediaAsset.project_id == project.id, MediaAsset.status == MediaAssetStatus.READY)
     asset = db.scalars(ready.order_by(MediaAsset.created_at.desc())).first()
@@ -61,7 +63,7 @@ def request_transcription(db: Session, dispatcher: JobDispatcher, project_id: st
         raise MediaNotReadyError(ERROR_MEDIA_NOT_READY.format(project_id=project_id))
     if db.scalar(select(Transcript.id).where(Transcript.media_asset_id == asset.id)) is not None:
         raise TranscriptAlreadyExistsError(ERROR_TRANSCRIPT_ALREADY_EXISTS.format(project_id=project_id))
-    return submit_transcription(db, dispatcher, asset)
+    return submit_transcription(db, dispatcher, asset, actor=actor)
 
 
 def _segment(segment: TranscriptSegment) -> schema.TranscriptSegment:

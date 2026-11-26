@@ -13,6 +13,7 @@ DEFAULT_S3_ENDPOINT_URL = "http://seaweedfs:8333"
 DEFAULT_S3_ACCESS_KEY = "pei"
 DEFAULT_S3_SECRET_KEY = "pei"
 DEFAULT_S3_BUCKET = "synopstudio-media"
+
 # The address browsers use; signatures cover the host, so it cannot be the internal service name.
 DEFAULT_S3_PUBLIC_ENDPOINT_URL = "http://localhost:8333"
 DEFAULT_S3_SIGNED_URL_TTL_SECONDS = 3600
@@ -28,6 +29,8 @@ DEFAULT_SWEEP_INTERVAL_SECONDS = 60
 DEFAULT_JOB_STALLED_AFTER_SECONDS = 30 * 60
 # A download of a time range reports no progress, and a 4 h range can take as long as the video itself.
 DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS = 5 * 3600
+DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS = 6 * 3600
+
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
 DEFAULT_WHISPER_MODEL = "large-v3-turbo"
@@ -39,7 +42,21 @@ DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
 ENV_TRUE_VALUE = "true"
+# A session in use renews itself after half of this, so it never expires while the user waits (WCAG 2.2.1).
+DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600
+# Local development runs over plain HTTP; behind TLS, set SESSION_COOKIE_SECURE=true.
+DEFAULT_SESSION_COOKIE_SECURE = "false"
 
+DEFAULT_KEYCLOAK_PUBLIC_URL = "http://localhost:8080"
+DEFAULT_KEYCLOAK_INTERNAL_URL = "http://keycloak:8080"
+DEFAULT_KEYCLOAK_REALM = "synopstudio"
+DEFAULT_KEYCLOAK_CLIENT_ID = "synopstudio-backend"
+DEFAULT_KEYCLOAK_CLIENT_SECRET = "pei-dev-client-secret"
+DEFAULT_APP_PUBLIC_URL = "http://localhost:5173"
+DEFAULT_API_PUBLIC_PATH = "/api"
+DEFAULT_IDP_TIMEOUT_SECONDS = 10
+DEFAULT_LOGIN_REQUEST_TTL_SECONDS = 10 * 60
+DEFAULT_REAUTH_MAX_AGE_SECONDS = 5 * 60
 
 # --- Storage layout ---
 PROJECTS_DIR = "projects"
@@ -81,6 +98,12 @@ ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while a job is runn
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
+ERROR_NOT_AUTHENTICATED = "Sign in to continue."
+ERROR_ACCOUNT_BUSY = "The account cannot be deleted while an ingestion is running in one of its projects."
+ERROR_IDENTITY_PROVIDER_UNAVAILABLE = "The sign-in service is unavailable; please try again."
+LOG_IDENTITY_PROVIDER_UNAVAILABLE = "Identity provider request failed"
+LOG_IDENTITY_PROVIDER_LOGOUT_FAILED = "Could not end the identity provider session"
+LOG_LOGIN_REJECTED = "Sign-in rejected: %s"
 
 # --- Project documents ---
 JSON_DUMP_MODE = "json"
@@ -97,22 +120,30 @@ LOG_FORMAT = "%(levelname)s:     %(name)s - %(message)s"
 HEALTH_ROUTE = "/health"
 HEALTH_OK = "ok"
 ROUTE_ROOT = ""
+
 PROJECTS_ROUTE_PREFIX = "/projects"
 PROJECTS_ROUTE_TAG = "projects"
 PROJECT_ID_ROUTE = "/{project_id}"
+
 INGESTION_ROUTE_TAG = "ingestion"
 URL_INGESTION_ROUTE = "/{project_id}/ingestions/url"
 INGESTION_STATUS_ROUTE = "/{project_id}/ingestion"
+
 MEDIA_ROUTE = "/{project_id}/media"
 URL_MAX_LENGTH = 2048
 TIMECODE_MAX_LENGTH = 16
+
 ERROR_INGESTION_NOT_STARTED = "No ingestion has been started for project {project_id}."
+
 UPLOADS_ROUTE = "/{project_id}/uploads"
 UPLOAD_ROUTE = "/{project_id}/uploads/{upload_id}"
 UPLOAD_CHUNK_ROUTE = "/{project_id}/uploads/{upload_id}/chunks/{index}"
 UPLOAD_COMPLETE_ROUTE = "/{project_id}/uploads/{upload_id}/complete"
+
 JOBS_ROUTE_TAG = "jobs"
+PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
+JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
 TRANSCRIPTS_ROUTE_TAG = "transcripts"
 TRANSCRIPT_ROUTE = "/{project_id}/transcript"
@@ -120,8 +151,25 @@ TRANSCRIPTION_ROUTE = "/{project_id}/transcription"
 ERROR_TRANSCRIPT_NOT_FOUND = "Project {project_id} has no transcript yet."
 ERROR_TRANSCRIPT_RANGE = "end must be after start."
 ERROR_TRANSCRIPT_ALREADY_EXISTS = "The video of project {project_id} is already transcribed."
+
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
+WS_CLOSE_NOT_AUTHENTICATED = 4401
+AUTH_ROUTE_PREFIX = "/auth"
+AUTH_ROUTE_TAG = "auth"
+REGISTER_ROUTE = "/register"
+LOGIN_ROUTE = "/login"
+LOGOUT_ROUTE = "/logout"
+LOGOUT_ALL_ROUTE = "/logout-all"
+ME_ROUTE = "/me"
+CALLBACK_ROUTE = "/callback"
+ACCOUNT_ROUTE = "/account"
+USER_AGENT_HEADER = "user-agent"
+SESSION_COOKIE_NAME = "synopstudio_session"
+LOGIN_COOKIE_NAME = "synopstudio_login"
+SESSION_COOKIE_PATH = "/"
+# Lax: the cookie is not sent with requests that other sites start (forms, scripts, images).
+SESSION_COOKIE_SAMESITE = "lax"
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
 PROGRESS_QUEUE_SIZE = 1
 FILE_NAME_MIN_LENGTH = 1
@@ -160,6 +208,13 @@ JOBS_QUEUE_FORMAT = "jobs.{job_type}"
 JOB_EVENTS_EXCHANGE = "job_events"
 JOB_EVENTS_QUEUE = "jobs.events"
 JOB_EVENTS_ROUTING_KEY = "job.update"
+DEAD_LETTER_EXCHANGE = "jobs.dlx"
+DEAD_LETTER_QUEUE = "jobs.dlq"
+DEAD_LETTER_EXCHANGE_ARG = "x-dead-letter-exchange"
+QUEUE_MAX_LENGTH_ARG = "x-max-length"
+QUEUE_MESSAGE_TTL_ARG = "x-message-ttl"
+DEAD_LETTER_MAX_LENGTH = 1000
+DEAD_LETTER_TTL_MS = 7*24*3600*1000
 MEDIA_EVENTS_EXCHANGE = "media_events"
 MEDIA_INGESTED_QUEUE = "media.ingested"
 TRANSCRIPT_READY_EVENT = "transcript.ready"
@@ -177,7 +232,8 @@ LOG_TRANSCRIPTION_NOT_STARTED = "Transcription of ingestion job %s not started: 
 LOG_TRANSCRIPTION_NO_VIDEO = "Ingestion job %s has no video left to transcribe; event ignored"
 LOG_TRIGGER_FAILED = "Media event of ingestion job %s could not be handled"
 ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
-LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s)"
+LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s), %d expired session(s)"
+ERROR_JOB_QUEUED_STALLED = "The job never started processing; please submit it again."
 LOG_SWEEP_FAILED = "Periodic sweep failed"
 LOG_SWEEP_PURGE_FAILED = "Abandoned uploads could not be removed"
 BROKER_CONTENT_TYPE = "application/json"
@@ -472,12 +528,14 @@ JOB_STEP_MESSAGES = {
         JobStepProcessingEnum.EXTRACTING_AUDIO: "Extracting audio",
         JobStepProcessingEnum.GENERATING_PROXY: "Generating preview video",
         JobStepProcessingEnum.PERSISTING_RESULTS: "Saving technical metadata",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
         JobStepProcessingEnum.FINISHED: "Ingestion completed",
     },
     JobTypeEnum.TRANSCRIPTION: {
-        JobStepProcessingEnum.INITIALIZING: "Preparing the audio",
-        JobStepProcessingEnum.TRANSCRIBING: "Transcribing audio",
+        JobStepProcessingEnum.INITIALIZING: "Preparing the transcription",
+        JobStepProcessingEnum.TRANSCRIBING: "Transcribing the speech",
         JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
+        JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
         JobStepProcessingEnum.FINISHED: "Transcription completed",
     },
 }
@@ -600,6 +658,114 @@ JOB_ACTIVE_TRANSCRIPTION_INDEX = "uq_jobs_one_active_transcription_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
+# --- Accounts and sessions (MS3 §1.1.2, §1.1.6, §1.4.1) ---
+TABLE_USERS = "users"
+TABLE_AUTH_SESSIONS = "auth_sessions"
+FK_USER_ID = f"{TABLE_USERS}.id"
+# The longest address SMTP accepts (RFC 5321).
+EMAIL_MAX_LENGTH = 254
+USER_NAME_MAX_LENGTH = 120
+SESSION_TOKEN_BYTES = 32
+# SHA-256 as hex.
+TOKEN_HASH_LENGTH = 64
+# Share of the lifetime after which a session in use gets a new full lifetime.
+SESSION_RENEW_FRACTION = 0.5
+# IPv6 in text form.
+IP_ADDRESS_MAX_LENGTH = 45
+USER_AGENT_MAX_LENGTH = 512
+# OpenID Connect identifiers ("sub", "sid") are at most 255 ASCII characters (OIDC Core 1.0 §2).
+SUBJECT_MAX_LENGTH = 255
+IDP_SESSION_ID_MAX_LENGTH = 255
+
+
+class AgeGroup(str, Enum):
+    """Age declared at registration; under 13 has no value, so it cannot register (MS3 §1.4.1)."""
+
+    ADULT = "adult"
+    MINOR_WITH_GUARDIAN_CONSENT = "minor_with_guardian_consent"
+
+# --- Sign-in through Keycloak: OpenID Connect authorization code flow with PKCE (RFC 6749, RFC 7636) ---
+OIDC_SCOPES = "openid profile email"
+OIDC_RESPONSE_TYPE = "code"
+OIDC_GRANT_AUTHORIZATION_CODE = "authorization_code"
+OIDC_GRANT_CLIENT_CREDENTIALS = "client_credentials"
+PKCE_METHOD = "S256"
+# Keycloak signs ID tokens with RS256 unless the realm is changed; any other algorithm is refused.
+ID_TOKEN_ALGORITHMS = ("RS256",)
+# Random bytes behind state, nonce and the PKCE verifier; 64 bytes give an 86-character verifier (43–128 allowed).
+LOGIN_STATE_BYTES = 32
+LOGIN_NONCE_BYTES = 32
+PKCE_VERIFIER_BYTES = 64
+# prompt=create opens the registration page (Keycloak 26.1+); prompt=login with max_age=0 forces a new password entry.
+OIDC_PROMPT_CREATE = "create"
+OIDC_PROMPT_LOGIN = "login"
+OIDC_REAUTH_MAX_AGE = "0"
+
+# Keycloak paths, relative to KEYCLOAK_PUBLIC_URL or KEYCLOAK_INTERNAL_URL.
+KEYCLOAK_ISSUER_PATH = "/realms/{realm}"
+KEYCLOAK_DISCOVERY_PATH = "/realms/{realm}/.well-known/openid-configuration"
+KEYCLOAK_ACCOUNT_PATH = "/realms/{realm}/account"
+KEYCLOAK_ADMIN_USER_PATH = "/admin/realms/{realm}/users/{user_id}"
+KEYCLOAK_ADMIN_USER_LOGOUT_PATH = "/admin/realms/{realm}/users/{user_id}/logout"
+KEYCLOAK_ADMIN_SESSION_PATH = "/admin/realms/{realm}/sessions/{session_id}"
+
+# ID token claims read by the backend; age_group and roles come from the mappers in the realm file.
+CLAIM_SUBJECT = "sub"
+CLAIM_EMAIL = "email"
+CLAIM_NAME = "name"
+CLAIM_NONCE = "nonce"
+CLAIM_SESSION_ID = "sid"
+CLAIM_AUTH_TIME = "auth_time"
+CLAIM_AGE_GROUP = "age_group"
+CLAIM_ROLES = "roles"
+ADMIN_ROLE = "admin"
+
+# After a failed sign-in the browser goes back to the frontend login page with ?error=<code>.
+FRONTEND_LOGIN_PATH = "/login"
+FRONTEND_DEFAULT_NEXT_PATH = "/app"
+LOGIN_ERROR_QUERY_PARAM = "error"
+
+
+class LoginErrorCode(str, Enum):
+    """Why a sign-in did not finish; the frontend shows a message for each code."""
+
+    LOGIN_FAILED = "login_failed"
+    LOGIN_CANCELLED = "login_cancelled"
+    AGE_GROUP_MISSING = "age_group_missing"
+    IDENTITY_PROVIDER_UNAVAILABLE = "identity_provider_unavailable"
+
+
+# Code the frontend reads on a 403 to start a fresh sign-in before deleting the account.
+REAUTHENTICATION_REQUIRED_CODE = "reauthentication_required"
+
+# Claims every ID token must carry; a token without one of them is refused.
+ID_TOKEN_REQUIRED_CLAIMS = ("exp", "iat", "iss", "aud", "sub", "nonce", "auth_time")
+# Base64url without padding, as PKCE requires (RFC 7636 §4.2).
+BASE64_PADDING = "="
+# The service-account token is renewed this long before it expires, so no Admin API call carries an expired one.
+ADMIN_TOKEN_REFRESH_MARGIN_SECONDS = 30
+AUTHORIZATION_HEADER = "Authorization"
+# Since Keycloak 26.8.2 the Admin API only accepts tokens with this scope (its audience check).
+KEYCLOAK_ADMIN_API_SCOPE = "kc-admin-api"
+BEARER_TOKEN_FORMAT = "Bearer {token}"
+# Characters left as they are when a value becomes one URL path segment: none, so "/" and ".." cannot change the path.
+URL_SEGMENT_SAFE_CHARACTERS = ""
+# Why a sign-in was refused; only logged, the browser gets a LoginErrorCode.
+LOGIN_REASON_CODE_REFUSED = "Keycloak refused the authorization code"
+LOGIN_REASON_MISSING_ID_TOKEN = "the token response has no ID token"
+LOGIN_REASON_INVALID_ID_TOKEN = "the ID token is invalid: {error}"
+LOGIN_REASON_UNKNOWN_KEY = "the ID token is signed with an unknown key"
+LOGIN_REASON_NONCE_MISMATCH = "the ID token nonce does not match the sign-in"
+LOGIN_REASON_MISSING_EMAIL = "the ID token has no email"
+LOGIN_REASON_AGE_GROUP = "the account has no valid age group"
+LOGIN_REASON_ACCOUNT_CONFLICT = "another account already has this email or subject"
+LOGIN_REASON_STATE_MISMATCH = "the callback does not belong to a sign-in started in this browser"
+LOGIN_REASON_RETURNED_ERROR = "Keycloak returned the error {error!r}"
+# Where to go after signing in: only a path on this site, so the login cannot redirect to another one.
+NEXT_QUERY_PARAM = "next"
+NEXT_PATH_PREFIX = "/"
+# Browsers read a backslash as "/", so a backslash after the first "/" would leave the site like "//".
+NEXT_PATH_FORBIDDEN_CHARACTERS = "\\"
 
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"
@@ -607,6 +773,7 @@ class AuditAction(str, Enum):
     UPLOAD_STARTED = "upload.started"
     INGESTION_REQUESTED = "ingestion.requested"
     INGESTION_COMPLETED = "ingestion.completed"
+    INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
     TRANSCRIPTION_REQUESTED = "transcription.requested"
     TRANSCRIPTION_COMPLETED = "transcription.completed"
@@ -683,6 +850,19 @@ class Settings:
     default_language: str
     database_url: str
     database_echo: bool
+    session_ttl_seconds: int
+    session_cookie_secure: bool
+    job_queued_stalled_after_seconds: int
+    keycloak_public_url: str
+    keycloak_internal_url: str
+    keycloak_realm: str
+    keycloak_client_id: str
+    keycloak_client_secret: str
+    app_public_url: str
+    api_public_path: str
+    idp_timeout_seconds: int
+    login_request_ttl_seconds: int
+    reauth_max_age_seconds: int
 
 
 @lru_cache
@@ -710,6 +890,9 @@ def get_settings() -> Settings:
         job_download_stalled_after_seconds=int(
             os.environ.get("JOB_DOWNLOAD_STALLED_AFTER_SECONDS", DEFAULT_JOB_DOWNLOAD_STALLED_AFTER_SECONDS)
         ),
+        job_queued_stalled_after_seconds=int(
+            os.environ.get("JOB_QUEUED_STALLED_AFTER_SECONDS", DEFAULT_JOB_QUEUED_STALLED_AFTER_SECONDS)
+        ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         whisper_device=os.environ.get("WHISPER_DEVICE", DEFAULT_WHISPER_DEVICE),
@@ -719,4 +902,20 @@ def get_settings() -> Settings:
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
+        session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS)),
+        session_cookie_secure=(
+            os.environ.get("SESSION_COOKIE_SECURE", DEFAULT_SESSION_COOKIE_SECURE).lower() == ENV_TRUE_VALUE
+        ),
+        keycloak_public_url=os.environ.get("KEYCLOAK_PUBLIC_URL", DEFAULT_KEYCLOAK_PUBLIC_URL),
+        keycloak_internal_url=os.environ.get("KEYCLOAK_INTERNAL_URL", DEFAULT_KEYCLOAK_INTERNAL_URL),
+        keycloak_realm=os.environ.get("KEYCLOAK_REALM", DEFAULT_KEYCLOAK_REALM),
+        keycloak_client_id=os.environ.get("KEYCLOAK_CLIENT_ID", DEFAULT_KEYCLOAK_CLIENT_ID),
+        keycloak_client_secret=os.environ.get("KEYCLOAK_CLIENT_SECRET", DEFAULT_KEYCLOAK_CLIENT_SECRET),
+        app_public_url=os.environ.get("APP_PUBLIC_URL", DEFAULT_APP_PUBLIC_URL),
+        api_public_path=os.environ.get("API_PUBLIC_PATH", DEFAULT_API_PUBLIC_PATH),
+        idp_timeout_seconds=int(os.environ.get("IDP_TIMEOUT_SECONDS", DEFAULT_IDP_TIMEOUT_SECONDS)),
+        login_request_ttl_seconds=int(
+            os.environ.get("LOGIN_REQUEST_TTL_SECONDS", DEFAULT_LOGIN_REQUEST_TTL_SECONDS)
+        ),
+        reauth_max_age_seconds=int(os.environ.get("REAUTH_MAX_AGE_SECONDS", DEFAULT_REAUTH_MAX_AGE_SECONDS)),
     )

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_user, require_project_access
 from app.api.errors import SERVICE_ERRORS, http_error
 from app.core.config import (
     CONTENT_TYPE_MAX_LENGTH,
@@ -18,7 +19,7 @@ from app.core.config import (
     UPLOAD_ROUTE,
     UPLOADS_ROUTE,
 )
-from app.database.models import UploadSession
+from app.database.models import UploadSession, User
 from app.database.session import get_db
 from app.schemas.job import JobStatusResponseSchema
 from app.services.storage.local import LocalStorage, get_storage
@@ -72,21 +73,29 @@ def _progress(object_storage: ObjectStorage, session: UploadSession) -> UploadPr
 
 # Open a chunked upload after checking the licence and the declared extension, MIME type and size.
 # Source: MS2 FR02 – Step 1 (direct upload, chunked multipart upload for multi-GB files).
-@router.post(UPLOADS_ROUTE, status_code=status.HTTP_201_CREATED, response_model=UploadProgress)
+@router.post(
+    UPLOADS_ROUTE,
+    status_code=status.HTTP_201_CREATED,
+    response_model=UploadProgress,
+    dependencies=[Depends(require_project_access)],
+)
 def create_upload(
     project_id: str,
     body: UploadStart,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     object_storage: ObjectStorage = Depends(get_object_storage),
 ):
     try:
-        session = start_upload(db, object_storage, project_id, body.file_name, body.size_bytes, body.content_type)
+        session = start_upload(
+            db, object_storage, project_id, body.file_name, body.size_bytes, body.content_type, actor=user
+        )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
     return _progress(object_storage, session)
 
 
-@router.get(UPLOAD_ROUTE, response_model=UploadProgress)
+@router.get(UPLOAD_ROUTE, response_model=UploadProgress, dependencies=[Depends(require_project_access)])
 def read_upload(
     project_id: str,
     upload_id: str,
@@ -101,7 +110,9 @@ def read_upload(
 
 # Receive one chunk as multipart form data (field "chunk"); sending the same chunk again replaces it.
 # Source: MS2 FR02 – Step 1 (chunked multipart upload).
-@router.put(UPLOAD_CHUNK_ROUTE, status_code=status.HTTP_204_NO_CONTENT)
+@router.put(
+    UPLOAD_CHUNK_ROUTE, status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_project_access)]
+)
 def upload_chunk(
     project_id: str,
     upload_id: str,
@@ -121,11 +132,17 @@ def upload_chunk(
 
 # Check that every chunk arrived and queue the job, which joins them and applies the optional time range.
 # Source: MS2 FR02 – Inputs (optional start/end timecodes), Step 2 and Outputs (asynchronous ingestion, no UI blocking).
-@router.post(UPLOAD_COMPLETE_ROUTE, status_code=status.HTTP_202_ACCEPTED, response_model=JobStatusResponseSchema)
+@router.post(
+    UPLOAD_COMPLETE_ROUTE,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobStatusResponseSchema,
+    dependencies=[Depends(require_project_access)],
+)
 def complete_upload(
     project_id: str,
     upload_id: str,
     body: Optional[UploadCompletion] = None,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: LocalStorage = Depends(get_storage),
     object_storage: ObjectStorage = Depends(get_object_storage),
@@ -139,7 +156,7 @@ def complete_upload(
         session = get_upload(db, project_id, upload_id)
         require_all_chunks(object_storage, session)
         return submit_upload_ingestion(
-            db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time
+            db, storage, object_storage, dispatcher, session, time_range.start_time, time_range.end_time, actor=user
         )
     except SERVICE_ERRORS as exc:
         raise http_error(exc) from exc
