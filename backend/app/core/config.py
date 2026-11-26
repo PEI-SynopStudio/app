@@ -943,6 +943,33 @@ PROMPT_CONTROL_CHARACTERS_PATTERN = r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+"
 PROMPT_TEXT_SEPARATOR = " "
 ERROR_PROMPT_VARIABLES = "Prompt {name!r}: missing variables {missing}, unused variables {unused}."
 ERROR_PROMPT_INVALID_PLACEHOLDER = "Prompt {name!r} has an invalid placeholder; write a literal $ as $$."
+DEFAULT_LLM_TIMEOUT_SECONDS = 240
+# Prompt and reply texts hold transcript text (personal data): logged at DEBUG only when LLM_LOG_CONTENT=true.
+DEFAULT_LLM_LOG_CONTENT = "false"
+# Attempts in total for one call when the reply is not valid JSON for the schema.
+LLM_MAX_ATTEMPTS = 3
+# Extra requests, per attempt, while the server is unavailable.
+LLM_UNAVAILABLE_RETRIES = 1
+LLM_UNAVAILABLE_BACKOFF_SECONDS = 10.0
+# Qwen3 can write its reasoning between these tags before the answer.
+LLM_THINK_BLOCK_PATTERN = r"<think>.*?</think>"
+LLM_RETRY_FEEDBACK = (
+    "Your previous reply is not valid JSON for the required schema:\n{errors}\n"
+    "Answer again with only the corrected JSON."
+)
+LLM_VALIDATION_ERROR_FORMAT = "- {location}: {message}"
+LLM_VALIDATION_ERROR_SEPARATOR = "\n"
+LLM_VALIDATION_LOCATION_SEPARATOR = "."
+LLM_VALIDATION_ROOT_LOCATION = "(reply)"
+ERROR_LLM_INVALID_RESPONSE = (
+    "The language model did not return valid JSON for prompt {prompt!r} after {attempts} attempt(s)."
+)
+LOG_LLM_CALL = (
+    "LLM call %s (version %s) on %s %s: succeeded=%s, attempts=%d, seconds=%.2f, "
+    "input_tokens=%s, output_tokens=%s"
+)
+LOG_LLM_CONTENT = "LLM prompt %s, attempt %d, %s message:\n%s"
+LOG_LLM_UNAVAILABLE_RETRY = "LLM server unavailable for prompt %s (%s); retrying in %.0f s"
 
 
 def _csv(name: str, default: str) -> Tuple[str, ...]:
@@ -993,6 +1020,7 @@ class Settings:
     idp_timeout_seconds: int
     login_request_ttl_seconds: int
     reauth_max_age_seconds: int
+    llm_log_content: bool
 
 
 @lru_cache
@@ -1048,4 +1076,5 @@ def get_settings() -> Settings:
             os.environ.get("LOGIN_REQUEST_TTL_SECONDS", DEFAULT_LOGIN_REQUEST_TTL_SECONDS)
         ),
         reauth_max_age_seconds=int(os.environ.get("REAUTH_MAX_AGE_SECONDS", DEFAULT_REAUTH_MAX_AGE_SECONDS)),
+        llm_log_content=os.environ.get("LLM_LOG_CONTENT", DEFAULT_LLM_LOG_CONTENT).lower() == ENV_TRUE_VALUE,
     )
