@@ -12,6 +12,7 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 
 - `docs/requirements.md` — actors, functional requirements FR01–FR19, NFR targets, legal/compliance rules. Read before implementing or changing any feature; cite requirement IDs.
 - `docs/architecture.md` — target components, worker responsibilities, libraries per worker, end-to-end processing flow, open design points. Read before adding services, workers, queues or storage.
+- `docs/llm-contract.md` — contract for AI clip generation (T4.11–T4.16): sentences, data formats, LLM interface, step functions and their owners, validation, the clip proposal job, database, audit log, API and `config.py` names. Read before working on the LLM layer or clip generation; changing it needs a contract pull request approved by both owners.
 
 ## Domain rules that affect code
 
@@ -44,6 +45,7 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/app/services/storage/local.py` — working area of a running job on the media volume; PyAV and yt-dlp need local files.
 - `backend/app/services/projects/projects.py` — project registration and the licence check (FR01).
 - `backend/app/services/audit/audit.py` — adds entries to the append-only audit log (FR18).
+- `backend/app/services/llm/` — LLM layer (`docs/llm-contract.md`, section 7): `provider.py` holds the `LLMProvider` interface with its request and reply types, `errors.py` the LLM errors. The client, prompt loading and the Ollama and OpenAI-compatible providers come in T4.11.
 - `backend/app/services/workflow/ingestion_pipeline.py` — `run_ingestion`: runs FR02 steps 2–6 on local files, sends the results to object storage and reports each step as a job event.
 - `backend/app/services/workflow/dispatcher.py` — `JobDispatcher` interface.
 - `backend/app/services/workflow/rabbitmq.py` — exchanges, queues and `RabbitMQDispatcher`.
@@ -54,13 +56,13 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/app/services/workflow/jobs.py` — creates jobs and applies status changes and worker events on the `jobs` table.
 - `backend/app/services/workflow/ingestion_results.py` — reflects ingestion jobs on the project and media asset (FR02 steps 3 and 6).
 - `backend/app/services/workflow/submission.py` — creates the media asset and job of an ingestion and hands it to the dispatcher.
-- `backend/app/schemas/` — job contracts: enums, API and broker messages, timecodes.
+- `backend/app/schemas/` — job contracts: enums, API and broker messages, timecodes. `clips.py` holds the clip generation formats shared by the LLM steps, validation and the clip proposal job (`docs/llm-contract.md`, section 6).
 - `backend/app/core/exceptions.py` — domain exceptions of the job model.
 - `backend/app/database/` — SQLAlchemy base, session (`get_db`) and `models/`.
 - `backend/migrations/` — Alembic migrations; `alembic upgrade head` runs when the backend starts.
 - `backend/app/workers/ingestion_worker.py` — RabbitMQ worker that runs the ingestion; it never touches PostgreSQL and runs from the backend image.
 - `backend/app/auth`, `backend/app/services/users` — empty packages reserved for auth and users.
-- `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests.
+- `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests. `fake_llm_provider.py` replies with scripted LLM answers, so no test needs a model or network; `data/clips/short_transcript.json` is a synthetic transcript for the clip generation tests.
 - `frontend/` — React 19 + TypeScript + Vite; still the stock template.
 - Configuration: `docker-compose.yml`, `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
 - Durable media lives in SeaweedFS (`S3_BUCKET`, the `seaweedfs_data` Docker volume), encrypted at rest. `/data/media` (`MEDIA_ROOT`, the `media_data` Docker volume) only holds the files of a running job.
@@ -114,6 +116,7 @@ Patterns:
 - All code content in English: identifiers, comments, log and error messages, docstrings, tests.
 - SupoClip (AGPL-3.0) is a design reference only. Never copy or adapt its code, not even small snippets; understand the approach, then write an original implementation. Only open SupoClip when the user explicitly gives its path.
 - Do not run any git commands; the user handles version control.
+- After each approved step is written, suggest one short commit message for it in Conventional Commits style, without Jira keys (e.g. `feat(llm): add LLM provider interface and errors`).
 - Do not add new dependencies (pip, npm, Docker images) without asking first. Test-only Python packages go in `backend/requirements-dev.txt`, never in `requirements.txt`.
 - Never read or print secrets (`.env` files, credentials, keys).
 - Before adding or changing any code, always show the user the exact code first (full content of new files, the before/after of edited parts) and wait for explicit approval before writing it. This applies to every change, including single-file edits and approved plans: an approved plan does not approve the code.
