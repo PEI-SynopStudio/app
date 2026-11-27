@@ -1,9 +1,10 @@
-import { useRef, type ComponentType } from "react";
+import { useRef, useState, type ComponentType } from "react";
 import { Link, Outlet, useLocation } from "react-router";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { IconGrid, IconLogout, IconPlus, IconSliders, IconText, type IconProps } from "../components/Icons";
 import { Logo } from "../components/Logo";
-import { currentUser } from "../data/mock";
 import { useMotion } from "../hooks/useMotion";
+import { signOut } from "../lib/auth";
 import { DURATION, EASE, Flip, gsap, prefersReducedMotion, useGSAP } from "../lib/gsap";
 import "../styles/app.css";
 
@@ -49,7 +50,9 @@ function initials(name: string) {
 }
 
 export function AppLayout() {
+  const user = useCurrentUser();
   const { pathname } = useLocation();
+  const [signOutFailed, setSignOutFailed] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const indicatorState = useRef<ReturnType<typeof Flip.getState> | null>(null);
 
@@ -80,6 +83,17 @@ export function AppLayout() {
     const indicator = sidebarRef.current?.querySelector(INDICATOR);
     if (indicator) indicatorState.current = Flip.getState(indicator);
   });
+
+  // On success signOut leaves the page; a failure (no network) only changes the button's label.
+  async function handleSignOut() {
+    setSignOutFailed(false);
+    try {
+      await signOut();
+    } catch {
+      setSignOutFailed(true);
+    }
+  }
+  const signOutLabel = signOutFailed ? "Couldn't log out. Try again." : "Log out";
 
   return (
     <div className="app">
@@ -112,15 +126,21 @@ export function AppLayout() {
 
         <div className="app-user" data-nav-item>
           <span className="app-user__avatar" aria-hidden="true">
-            {initials(currentUser.name)}
+            {initials(user.name)}
           </span>
           <div className="app-user__info">
-            <p className="app-user__name">{currentUser.name}</p>
-            <p className="app-user__email">{currentUser.email}</p>
+            <p className="app-user__name">{user.name}</p>
+            <p className="app-user__email">{user.email}</p>
           </div>
-          <Link to="/" className="app-user__logout" aria-label="Log out" title="Log out">
+          <button
+            type="button"
+            className="app-user__logout"
+            aria-label={signOutLabel}
+            title={signOutLabel}
+            onClick={handleSignOut}
+          >
             <IconLogout />
-          </Link>
+          </button>
         </div>
       </aside>
 

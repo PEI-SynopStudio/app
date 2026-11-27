@@ -6,6 +6,7 @@ export const PATHS = {
   login: "/login",
   signup: "/signup",
   app: "/app",
+  settings: "/app/settings",
 } as const;
 
 export const QUERY = {
@@ -15,6 +16,8 @@ export const QUERY = {
   error: "error",
   /** Set by the frontend when the session ended mid-task. */
   expired: "expired",
+  /** Set when coming back from the fresh sign-in that deleting the account asks for. */
+  confirmDelete: "confirmDelete",
 } as const;
 
 const FLAG_ON = "1";
@@ -37,6 +40,16 @@ export function loginPageUrl(next?: string, { expired = false } = {}): string {
 /** Whether the login page was opened because the session ended. */
 export function isExpiredLogin(params: URLSearchParams): boolean {
   return params.get(QUERY.expired) === FLAG_ON;
+}
+
+/** Settings with the delete dialog open again: where the fresh sign-in before deleting the account comes back. */
+export function confirmDeletePath(): string {
+  return `${PATHS.settings}?${QUERY.confirmDelete}=${FLAG_ON}`;
+}
+
+/** Whether Settings was opened on the way back from that fresh sign-in. */
+export function isConfirmDeleteReturn(params: URLSearchParams): boolean {
+  return params.get(QUERY.confirmDelete) === FLAG_ON;
 }
 
 /** next if it is a page of this app, else the app home: never another origin, never a sign-in page (no loop). */

@@ -89,6 +89,14 @@ export function openAccountPage(): void {
   window.location.assign(apiUrl(AUTH_ROUTES.account));
 }
 
+// Delete the account and all its projects (videos, documents, transcripts, clips); audit records are kept.
+// Throws ApiError: 403 REAUTHENTICATION_REQUIRED asks for reauthenticate() first, 409 while a job of the account runs.
+// Source: backend DELETE /auth/me; MS3 §1.4.3; T4.25.
+export async function deleteAccount(): Promise<void> {
+  await apiFetch<void>(AUTH_ROUTES.me, { method: "DELETE" });
+  window.location.assign(PATHS.home);
+}
+
 /** Ends this session here and at Keycloak, then reloads so nothing of this user stays in memory. */
 export async function signOut(): Promise<void> {
   await apiFetch<void>(AUTH_ROUTES.logout, { method: "POST", onUnauthorized: "throw" });
