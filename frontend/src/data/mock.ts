@@ -38,10 +38,8 @@ export interface SharedClip {
   sharedBy: string;
 }
 
-export const currentUser = {
-  name: "Demo User",
-  email: "demo@example.com",
-};
+// Who shared a clip, until the API resolves share links (Viewers have no account).
+const MOCK_SHARED_BY = "Demo User";
 
 function clip(
   id: string,
@@ -174,7 +172,7 @@ export function getClip(projectId: string | undefined, clipId: string | undefine
 export function getSharedClip(shareId: string | undefined): SharedClip | undefined {
   for (const project of projects) {
     const found = project.clips.find((item) => item.id === shareId);
-    if (found) return { project, clip: found, sharedBy: currentUser.name };
+    if (found) return { project, clip: found, sharedBy: MOCK_SHARED_BY };
   }
   return undefined;
 }

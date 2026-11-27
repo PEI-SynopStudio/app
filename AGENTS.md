@@ -63,7 +63,10 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/app/workers/ingestion_worker.py` — RabbitMQ worker that runs the ingestion; it never touches PostgreSQL and runs from the backend image.
 - `backend/app/auth`, `backend/app/services/users` — empty packages reserved for auth and users.
 - `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests. `fake_llm_provider.py` replies with scripted LLM answers, so no test needs a model or network; `data/clips/short_transcript.json` is a synthetic transcript for the clip generation tests.
-- `frontend/` — React 19 + TypeScript + Vite; still the stock template.
+- `frontend/` — React 19 + TypeScript + Vite. Pages still use `src/data/mock.ts`, except sign-in:
+  - `src/lib/api.ts` — `apiFetch`: calls the backend under `/api` with the session cookie (no tokens in the browser); a 401 goes to the login page.
+  - `src/lib/auth.ts`, `src/lib/paths.ts` — sign-in, sign-up, sign-out and account deletion through the backend and Keycloak; frontend paths and the `next` check.
+  - `src/auth/` — route loaders (`requireUser`, `redirectIfSignedIn`), `useCurrentUser` and the session check screens.
 - Configuration: `docker-compose.yml`, `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
 - Durable media lives in SeaweedFS (`S3_BUCKET`, the `seaweedfs_data` Docker volume), encrypted at rest. `/data/media` (`MEDIA_ROOT`, the `media_data` Docker volume) only holds the files of a running job.
 
