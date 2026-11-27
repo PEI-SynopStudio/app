@@ -33,8 +33,6 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "5173:5173"
     environment:
       CHOKIDAR_USEPOLLING: "true"
       API_PROXY_TARGET: http://backend:8000
@@ -52,8 +50,6 @@ services:
 
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://pei:pei@postgres:5432/pei}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://pei:pei@rabbitmq:5672/}
@@ -140,8 +136,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-pei}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pei}
       POSTGRES_DB: ${POSTGRES_DB:-pei}
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -156,9 +150,6 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pei}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-pei}
-    ports:
-      - "5672:5672"
-      - "15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -172,8 +163,6 @@ services:
     environment:
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-pei}
       AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
-    ports:
-      - "8333:8333"
     volumes:
       - seaweedfs_data:/data
     command: server -ip=seaweedfs -ip.bind=0.0.0.0 -filer -filer.encryptVolumeData -s3 -s3.encryptVolumeData
@@ -194,7 +183,9 @@ services:
     image: quay.io/keycloak/keycloak:26.8.2
     command: start-dev --import-realm
     ports:
-      - "8080:8080"
+      # Admin console only (Traefik doesn't route /admin): bound to this machine, never to the network.
+      # On the project VM, reach it with an SSH tunnel: ssh -L 8080:127.0.0.1:8080 <vm>.
+      - "127.0.0.1:8080:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
