@@ -1,10 +1,10 @@
 from __future__ import annotations
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 # --- Defaults for environment-dependent settings ---
 DEFAULT_MEDIA_ROOT = "/data/media"
@@ -928,9 +928,106 @@ PROMPT_CLIP_RATING = "clip_rating"
 PROMPT_CLIP_METADATA = "clip_metadata"  # reserved for T4.23
 
 
+# --- LLM layer (docs/llm-contract.md, section 15.2) ---
+APP_DIR = Path(__file__).resolve().parents[1]
+# Prompt texts: {name}.system.txt and {name}.user.txt, written with the steps that use them (T4.12, T4.13, T4.15).
+PROMPTS_DIR = APP_DIR / "prompts"
+PROMPT_SYSTEM_SUFFIX = ".system.txt"
+PROMPT_USER_SUFFIX = ".user.txt"
+PROMPT_FILE_ENCODING = "utf-8"
+# A prompt's version is the start of the SHA-256 of its two files, joined by the separator.
+PROMPT_VERSION_LENGTH = 12
+PROMPT_VERSION_SEPARATOR = b"\0"
+# Control characters and line breaks in user text become one space, so the text stays inside its block of the prompt.
+PROMPT_CONTROL_CHARACTERS_PATTERN = r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+"
+PROMPT_TEXT_SEPARATOR = " "
+ERROR_PROMPT_VARIABLES = "Prompt {name!r}: missing variables {missing}, unused variables {unused}."
+ERROR_PROMPT_INVALID_PLACEHOLDER = "Prompt {name!r} has an invalid placeholder; write a literal $ as $$."
+DEFAULT_LLM_TIMEOUT_SECONDS = 240
+# Prompt and reply texts hold transcript text (personal data): logged at DEBUG only when LLM_LOG_CONTENT=true.
+DEFAULT_LLM_LOG_CONTENT = "false"
+# Attempts in total for one call when the reply is not valid JSON for the schema.
+LLM_MAX_ATTEMPTS = 3
+# Extra requests, per attempt, while the server is unavailable.
+LLM_UNAVAILABLE_RETRIES = 1
+LLM_UNAVAILABLE_BACKOFF_SECONDS = 10.0
+# Qwen3 can write its reasoning between these tags before the answer.
+LLM_THINK_BLOCK_PATTERN = r"<think>.*?</think>"
+LLM_RETRY_FEEDBACK = (
+    "Your previous reply is not valid JSON for the required schema:\n{errors}\n"
+    "Answer again with only the corrected JSON."
+)
+LLM_VALIDATION_ERROR_FORMAT = "- {location}: {message}"
+LLM_VALIDATION_ERROR_SEPARATOR = "\n"
+LLM_VALIDATION_LOCATION_SEPARATOR = "."
+LLM_VALIDATION_ROOT_LOCATION = "(reply)"
+ERROR_LLM_INVALID_RESPONSE = (
+    "The language model did not return valid JSON for prompt {prompt!r} after {attempts} attempt(s)."
+)
+LOG_LLM_CALL = (
+    "LLM call %s (version %s) on %s %s: succeeded=%s, attempts=%d, seconds=%.2f, "
+    "input_tokens=%s, output_tokens=%s"
+)
+LOG_LLM_CONTENT = "LLM prompt %s, attempt %d, %s message:\n%s"
+LOG_LLM_UNAVAILABLE_RETRY = "LLM server unavailable for prompt %s (%s); retrying in %.0f s"
+DEFAULT_LLM_CONTEXT_TOKENS = 16384
+DEFAULT_LLM_MAX_OUTPUT_TOKENS = 2048
+DEFAULT_LLM_TEMPERATURE = 0.0
+DEFAULT_LLM_SEED = 42
+# Qwen3 reasoning off: the answer is JSON only, and reasoning would use most of the output tokens.
+DEFAULT_LLM_THINK = False
+# HTTP statuses after which the server may answer later: missing model (404), rate limit (429) and server errors.
+LLM_UNAVAILABLE_STATUS_CODES = (404, 429)
+HTTP_SERVER_ERROR_MIN_STATUS = 500
+# Ollama reports an error inside a started stream (e.g. the model runner stopped) with this status.
+OLLAMA_STREAM_ERROR_STATUS = -1
+ERROR_LLM_SERVER_UNAVAILABLE = "The {provider} server at {base_url} is unavailable for model {model!r}: {details}"
+ERROR_LLM_REQUEST_FAILED = "The {provider} server at {base_url} refused the request for model {model!r}: {details}"
+# Self-hosted OpenAI-compatible servers (vLLM, llama.cpp, LM Studio): the reply is constrained by response_format.
+OPENAI_RESPONSE_FORMAT_TYPE = "json_schema"
+# Strict mode accepts only a subset of JSON Schema; LLMClient validates every reply anyway.
+OPENAI_RESPONSE_FORMAT_STRICT = False
+# Qwen3 reasoning switch read by the chat templates of vLLM and llama.cpp; servers that do not know it ignore it.
+OPENAI_CHAT_TEMPLATE_KWARGS_KEY = "chat_template_kwargs"
+OPENAI_ENABLE_THINKING_KEY = "enable_thinking"
+# Retries belong to LLMClient, so the OpenAI library makes none of its own.
+OPENAI_CLIENT_MAX_RETRIES = 0
+# ChatOpenAI needs a key; servers started without one accept any value.
+OPENAI_COMPATIBLE_NO_API_KEY = "not-needed"
+# Provider profiles (docs/llm-contract.md §7.5); precedence: environment variable > profile > default in this file.
+LLM_CONFIG_FILE_NAME = "llm.toml"
+DEFAULT_LLM_CONFIG_FILE = str(Path(__file__).resolve().parent / LLM_CONFIG_FILE_NAME)
+LLM_CONFIG_FILE_ENCODING = "utf-8"  # TOML files are always UTF-8
+ERROR_LLM_PROFILE_UNKNOWN = "Unknown LLM profile {profile!r} in {path} (available: {available})."
+ERROR_LLM_PROVIDER_UNKNOWN = "Unknown LLM provider {provider!r} in profile {profile!r} (allowed: {allowed})."
+ERROR_LLM_API_KEY_MISSING = "LLM profile {profile!r} needs an API key in the environment variable {variable}."
+
+
+@dataclass(frozen=True)
+class LLMSettings:
+    """The selected LLM profile after the environment overrides (docs/llm-contract.md §7.5)."""
+
+    profile: str
+    provider: LlmProviderEnum
+    base_url: str
+    model: str
+    context_tokens: int
+    max_output_tokens: int
+    temperature: float
+    seed: int
+    timeout_seconds: float
+    think: bool
+    api_key: Optional[str] = field(default=None, repr=False)  # never logged
+
+
 def _csv(name: str, default: str) -> Tuple[str, ...]:
     raw = os.environ.get(name, default)
     return tuple(item.strip().lower() for item in raw.split(LIST_SEPARATOR) if item.strip())
+
+
+def _optional_env(name: str) -> Optional[str]:
+    """The value of an environment variable, or None when it is unset or empty (compose passes ${VAR:-} as empty)."""
+    return os.environ.get(name) or None
 
 
 @dataclass(frozen=True)
@@ -976,11 +1073,18 @@ class Settings:
     idp_timeout_seconds: int
     login_request_ttl_seconds: int
     reauth_max_age_seconds: int
+    llm_log_content: bool
+    llm_config_file: Path
+    llm_profile: Optional[str]  # None: default_profile of the file
+    llm_base_url: Optional[str]  # None: the profile's value
+    llm_model: Optional[str]
+    llm_timeout_seconds: Optional[float]
 
 
 @lru_cache
 def get_settings() -> Settings:
     """Load settings from environment variables (cached; call get_settings.cache_clear() after changing env)."""
+    llm_timeout_seconds = _optional_env("LLM_TIMEOUT_SECONDS")
     return Settings(
         media_root=Path(os.environ.get("MEDIA_ROOT", DEFAULT_MEDIA_ROOT)),
         rabbitmq_url=os.environ.get("RABBITMQ_URL", DEFAULT_RABBITMQ_URL),
@@ -1031,4 +1135,10 @@ def get_settings() -> Settings:
             os.environ.get("LOGIN_REQUEST_TTL_SECONDS", DEFAULT_LOGIN_REQUEST_TTL_SECONDS)
         ),
         reauth_max_age_seconds=int(os.environ.get("REAUTH_MAX_AGE_SECONDS", DEFAULT_REAUTH_MAX_AGE_SECONDS)),
+        llm_log_content=os.environ.get("LLM_LOG_CONTENT", DEFAULT_LLM_LOG_CONTENT).lower() == ENV_TRUE_VALUE,
+        llm_config_file=Path(_optional_env("LLM_CONFIG_FILE") or DEFAULT_LLM_CONFIG_FILE),
+        llm_profile=_optional_env("LLM_PROFILE"),
+        llm_base_url=_optional_env("LLM_BASE_URL"),
+        llm_model=_optional_env("LLM_MODEL"),
+        llm_timeout_seconds=float(llm_timeout_seconds) if llm_timeout_seconds else None,
     )
