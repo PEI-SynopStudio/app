@@ -1,4 +1,36 @@
 services:
+  # Single entry point (architecture §2, T4.36): HTTPS on 443, HTTP on 80 only redirects.
+  # Routes come from the labels of each service; the dashboard is off.
+  traefik:
+    image: traefik:v3.7.20
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=synopstudio
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      # Traefik v3 stops reading a request after 60 s; a slow 8 MB upload chunk needs longer.
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=${TRAEFIK_READ_TIMEOUT:-600s}
+      - --api.dashboard=false
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/certs:/certs:ro
+    networks:
+      default:
+        # Fixed, so uvicorn can trust forwarded headers from this address only (step 2).
+        ipv4_address: ${TRAEFIK_IP:-172.30.0.10}
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     ports:
@@ -6,6 +38,13 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       API_PROXY_TARGET: http://backend:8000
+      # The browser reaches Vite through Traefik on 443, so the hot-reload WebSocket uses that port.
+      HMR_CLIENT_PORT: "443"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${APP_HOST:-localhost}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.services.frontend.loadbalancer.server.port=5173
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -158,6 +197,13 @@ services:
       postgres:
         condition: service_healthy
     
+
+networks:
+  default:
+    name: synopstudio
+    ipam:
+      config:
+        - subnet: ${APP_NETWORK_SUBNET:-172.30.0.0/24}
 
 volumes:
   postgres_data:
