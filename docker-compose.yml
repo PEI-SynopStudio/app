@@ -61,14 +61,29 @@ services:
       S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
       S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # The browser only reaches the app over HTTPS through Traefik.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://localhost}
+      API_PUBLIC_PATH: ${API_PUBLIC_PATH:-/api}
+      # uvicorn serves the app under this path, so /api/docs loads /api/openapi.json; Traefik and the Vite proxy
+      # strip it before the request arrives. (FastAPI's own root_path argument is deprecated.)
+      UVICORN_ROOT_PATH: ${API_PUBLIC_PATH:-/api}
+      # uvicorn reads X-Forwarded-For/-Proto only from Traefik, so sessions store the real client IP.
+      FORWARDED_ALLOW_IPS: ${TRAEFIK_IP:-172.30.0.10}
+    labels:
+      - traefik.enable=true
+      # /api and /api/... only: a bare prefix would also match /apiary.
+      - traefik.http.routers.api.rule=Host(`${APP_HOST:-localhost}`) && (Path(`${API_PUBLIC_PATH:-/api}`) || PathPrefix(`${API_PUBLIC_PATH:-/api}/`))
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.middlewares=api-strip-prefix
+      - traefik.http.middlewares.api-strip-prefix.stripprefix.prefixes=${API_PUBLIC_PATH:-/api}
+      - traefik.http.services.api.loadbalancer.server.port=8000
     volumes:
       - ./backend:/app
       - media_data:/data/media
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --reload"
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,7 +199,7 @@ services:
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://localhost}
     volumes:
       - ./keycloak/import:/opt/keycloak/data/import:ro
     healthcheck:
