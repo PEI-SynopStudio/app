@@ -9,8 +9,10 @@ from app.core.config import AuditAction, JobTypeEnum, MediaAssetStatus, SourceTy
 from app.database.base import utc_now
 from app.database.models import AuditLog, Clip, Job, MediaAsset, Project, ProjectDocument
 from app.main import app
+from app.services.auth.auth import actor_hash
 from app.services.storage.local import LocalStorage, get_storage
 from app.services.storage.object_storage import ObjectStorageError, get_object_storage
+from conftest import sign_in
 from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 
 PROJECT_BODY = {
@@ -36,10 +38,10 @@ def object_storage():
 
 
 @pytest.fixture
-def client(db_override, storage, object_storage):
+def client(db_override, storage, object_storage, session_factory, user):
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_object_storage] = lambda: object_storage
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
@@ -155,6 +157,15 @@ def test_a_project_with_an_active_ingestion_cannot_be_deleted(client, db):
     assert client.get(f"/projects/{project_id}").status_code == 200
 
 
+def test_deleting_a_project_records_who_deleted_it(client, db, user):
+    project_id = new_project(client)
+
+    client.delete(f"/projects/{project_id}")
+
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == AuditAction.PROJECT_DELETED))
+    assert entry.actor_hash == actor_hash(user.id)
+
+
 def test_deleting_an_unknown_project_is_not_found(client):
     assert client.delete(f"/projects/{uuid.uuid4()}").status_code == 404
 
@@ -262,7 +273,7 @@ def test_the_library_counts_the_clips_of_each_project(client):
     assert counts == {"Debate": 2, "Without clips": 0}
 
 
-def test_project_settings_can_be_changed_and_the_change_is_audited(client, db):
+def test_project_settings_can_be_changed_and_the_change_is_audited(client, db, user):
     project_id = new_project(client)
 
     response = client.patch(
@@ -275,7 +286,7 @@ def test_project_settings_can_be_changed_and_the_change_is_audited(client, db):
     assert project["language"] == "pt-PT"  # omitted fields keep their value
     [entry] = updates(db)
     assert entry.details == {"changes": {"title": "Debate — final", "aspect_ratio": "1:1", "caption_style": None}}
-
+    assert entry.actor_hash == actor_hash(user.id)
 
 def test_a_change_to_the_same_value_records_nothing(client, db):
     project_id = new_project(client)

@@ -5,6 +5,22 @@ from app.database.models.job import Job
 from app.database.models.media_asset import MediaAsset
 from app.database.models.project import Project
 from app.database.models.project_document import ProjectDocument
+from app.database.models.transcript import Transcript, TranscriptSegment, TranscriptWord
 from app.database.models.upload_session import UploadSession
+from app.database.models.user import AuthSession, User
 
-__all__ = ["AudioTrack", "AuditLog", "Clip", "Job", "MediaAsset", "Project", "ProjectDocument", "UploadSession"]
+__all__ = [
+    "AudioTrack",
+    "AuditLog",
+    "AuthSession",
+    "Clip",
+    "Job",
+    "MediaAsset",
+    "Project",
+    "ProjectDocument",
+    "Transcript",
+    "TranscriptSegment",
+    "TranscriptWord",
+    "UploadSession",
+    "User",
+]

@@ -27,7 +27,7 @@ from app.core.config import (
     get_settings,
 )
 from app.database.base import utc_now
-from app.database.models import Project, ProjectDocument
+from app.database.models import Project, ProjectDocument, User
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import get_project
 from app.services.storage.object_storage import ObjectStorage
@@ -37,8 +37,8 @@ class DocumentNotFoundError(LookupError):
     pass
 
 
-def list_documents(db: Session, project_id: str, owner_id: Optional[str] = None) -> List[ProjectDocument]:
-    return list(get_project(db, project_id, owner_id).documents)
+def list_documents(db: Session, project_id: str) -> List[ProjectDocument]:
+    return list(get_project(db, project_id).documents)
 
 
 # Store a supporting document (slides, paper, glossary) in the project's object storage.
@@ -50,10 +50,10 @@ def add_document(
     file_name: Optional[str],
     content_type: Optional[str],
     data: BinaryIO,
-    owner_id: Optional[str] = None,
+    actor: Optional[User] = None,
 ) -> ProjectDocument:
     """The text extraction and indexing of FR03 run later, in a worker; here the file is only checked and kept."""
-    project = get_project(db, project_id, owner_id)
+    project = get_project(db, project_id)
     settings = get_settings()
     extension = _check_file_name(file_name, settings.allowed_document_extensions)
     size = _size(data)
@@ -83,6 +83,7 @@ def add_document(
         project.id,
         AuditAction.DOCUMENT_ADDED,
         {AUDIT_DETAIL_DOCUMENT_ID: str(document_id), AUDIT_DETAIL_FILE_NAME: file_name, AUDIT_DETAIL_SIZE_BYTES: size},
+        actor=actor,
     )
     _touch(project)
     db.commit()
@@ -92,10 +93,10 @@ def add_document(
 # Remove a supporting document and its file.
 # Source: MS2 FR03; MS3 §1.4.3 (no data kept after the user removes it); FR18.
 def delete_document(
-    db: Session, object_storage: ObjectStorage, project_id: str, document_id: str, owner_id: Optional[str] = None
+    db: Session, object_storage: ObjectStorage, project_id: str, document_id: str, actor: Optional[User] = None
 ) -> None:
     """The object goes first: if the storage fails, the row stays and the deletion can be repeated."""
-    project = get_project(db, project_id, owner_id)
+    project = get_project(db, project_id)
     document = db.get(ProjectDocument, _parse_document_id(document_id))
     if document is None or document.project_id != project.id:
         raise DocumentNotFoundError(ERROR_DOCUMENT_NOT_FOUND.format(document_id=document_id))
@@ -105,6 +106,7 @@ def delete_document(
         project.id,
         AuditAction.DOCUMENT_REMOVED,
         {AUDIT_DETAIL_DOCUMENT_ID: str(document.id), AUDIT_DETAIL_FILE_NAME: document.file_name},
+        actor=actor,
     )
     db.delete(document)
     _touch(project)

@@ -2,16 +2,17 @@ import uuid
 from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import String, Text, Uuid
+from sqlalchemy import ForeignKey, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import (
     DB_DELETE_ORPHAN_CASCADE,
+    DB_ON_DELETE_RESTRICT,
     DEFAULT_ASPECT_RATIO,
     DEFAULT_CAPTION_STYLE,
     DEFAULT_PROJECT_LANGUAGE,
-    OWNER_ID_MAX_LENGTH,
+    FK_USER_ID,
     PROJECT_AUTHOR_MAX_LENGTH,
     PROJECT_TITLE_MAX_LENGTH,
     TABLE_PROJECTS,
@@ -30,8 +31,9 @@ class Project(Base):
     __tablename__ = TABLE_PROJECTS
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    # Keycloak subject; stays empty until authentication exists (T3.11).
-    owner_id: Mapped[Optional[str]] = mapped_column(String(OWNER_ID_MAX_LENGTH), index=True)
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey(FK_USER_ID, ondelete=DB_ON_DELETE_RESTRICT), index=True
+    )
     title: Mapped[str] = mapped_column(String(PROJECT_TITLE_MAX_LENGTH))
     author: Mapped[str] = mapped_column(String(PROJECT_AUTHOR_MAX_LENGTH))
     speakers: Mapped[List[str]] = mapped_column(JSONB, default=list)

@@ -7,6 +7,7 @@ from app.core.config import AuditAction, LicenseType
 from app.database.models import AuditLog
 from app.schemas.project import ProjectCreate
 from app.services.audit.audit import record_audit
+from app.services.auth.auth import actor_hash
 from app.services.projects.projects import create_project
 
 
@@ -56,3 +57,20 @@ def test_an_audit_entry_is_only_saved_with_the_change_it_records(db):
     db.rollback()
 
     assert audit_details(db, project_id) == {}
+
+
+def test_the_owner_is_recorded_as_a_hash_of_their_id(db, user):
+    project = create_project(db, project_data(), user)
+
+    hashes = db.scalars(select(AuditLog.actor_hash).where(AuditLog.project_id == project.id)).all()
+
+    assert hashes == [actor_hash(user.id)] * 2
+    assert user.email not in hashes
+
+
+def test_an_entry_without_an_actor_has_no_hash(db):
+    project_id = uuid.uuid4()
+
+    entry = record_audit(db, project_id, AuditAction.PROJECT_CREATED)
+
+    assert entry.actor_hash is None

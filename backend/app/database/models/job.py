@@ -14,6 +14,7 @@ from app.core.config import (
     FK_PROJECT_ID,
     JOB_ACTIVE_INGESTION_INDEX,
     JOB_ACTIVE_STATUSES,
+    JOB_ACTIVE_TRANSCRIPTION_INDEX,
     PROGRESS_MIN,
     TABLE_JOBS,
     JobErrorCodeEnum,
@@ -56,10 +57,16 @@ class Job(Base):
         return self.id
 
 
-# One active ingestion per project, guaranteed by the database even with concurrent requests.
+# One active ingestion and one active transcription per project, guaranteed by the database even with concurrent requests.
 Index(
     JOB_ACTIVE_INGESTION_INDEX,
     Job.project_id,
     unique=True,
     postgresql_where=and_(Job.job_type == JobTypeEnum.INGESTION, Job.status.in_(JOB_ACTIVE_STATUSES)),
+)
+Index(
+    JOB_ACTIVE_TRANSCRIPTION_INDEX,
+    Job.project_id,
+    unique=True,
+    postgresql_where=and_(Job.job_type == JobTypeEnum.TRANSCRIPTION, Job.status.in_(JOB_ACTIVE_STATUSES)),
 )

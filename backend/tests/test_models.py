@@ -1,3 +1,4 @@
+import uuid
 from datetime import date
 
 import pytest
@@ -14,7 +15,18 @@ from app.core.config import (
     SourceType,
 )
 from app.database.base import utc_now
-from app.database.models import AudioTrack, AuditLog, Job, MediaAsset, Project, UploadSession
+from app.database.models import (
+    AudioTrack,
+    AuditLog,
+    Job,
+    MediaAsset,
+    Project,
+    Transcript,
+    TranscriptSegment,
+    TranscriptWord,
+    UploadSession,
+    User,
+)
 
 
 def make_project():
@@ -55,6 +67,27 @@ def test_project_keeps_the_fr01_metadata(db):
     assert stored.recording_date == date(2026, 10, 1)
     assert stored.status == ProjectStatus.DRAFT
     assert stored.owner_id is None
+
+def test_a_project_owner_must_be_an_existing_account(db):
+    project = make_project()
+    project.owner_id = uuid.uuid4()
+    db.add(project)
+
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+
+def test_an_account_that_still_owns_projects_cannot_be_deleted(db, user):
+    """Account deletion goes through delete_project first, so the videos leave the object storage too."""
+    project = make_project()
+    project.owner_id = user.id
+    db.add(project)
+    db.commit()
+
+    db.delete(db.get(User, user.id))
+
+    with pytest.raises(IntegrityError):
+        db.commit()
 
 
 def test_enums_are_stored_by_value(db):
@@ -154,12 +187,22 @@ def test_a_finished_ingestion_allows_a_new_one(db):
     assert count(db, Job) == 2
 
 
-def test_the_limit_only_applies_to_ingestion_jobs(db):
+def test_ingestion_and_transcription_limits_are_separate(db):
     project = saved_project(db)
     db.add_all([make_job(project), make_job(project, job_type=JobTypeEnum.TRANSCRIPTION)])
     db.commit()
 
     assert count(db, Job) == 2
+
+
+def test_a_project_has_only_one_active_transcription(db):
+    project = saved_project(db)
+    db.add(make_job(project, job_type=JobTypeEnum.TRANSCRIPTION))
+    db.commit()
+
+    db.add(make_job(project, job_type=JobTypeEnum.TRANSCRIPTION, status=JobStatusEnum.QUEUED))
+    with pytest.raises(IntegrityError):
+        db.commit()
 
 
 def test_job_exposes_the_id_expected_by_the_api(db):
@@ -215,4 +258,81 @@ def test_audit_entries_cannot_be_deleted(db):
 
     db.delete(entry)
     with pytest.raises(RuntimeError, match="cannot be changed"):
+        db.commit()
+
+
+def make_transcript(project, asset, words=("Bom", "dia")):
+    transcript = Transcript(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        media_asset_id=asset.id,
+        language="pt",
+        model_name="large-v3-turbo",
+        model_revision="a" * 40,
+        alignment_model_name="wav2vec2",
+        alignment_model_revision="b" * 40,
+        parameters={"beam_size": 5},
+        time_offset_seconds=0.0,
+        storage_key="transcript/transcript.json",
+        segment_count=1,
+        word_count=len(words),
+        aligned_word_count=len(words),
+    )
+    segment = TranscriptSegment(
+        position=0, text=" ".join(words), start_seconds=0.0, end_seconds=1.0, confidence=0.9,
+        avg_logprob=-0.2, no_speech_prob=0.01, compression_ratio=1.1, temperature=0.0,
+    )
+    segment.words = [
+        TranscriptWord(
+            transcript_id=transcript.id, position=index, text=text, start_seconds=index * 0.5,
+            end_seconds=index * 0.5 + 0.4, confidence=0.9, aligned=True,
+        )
+        for index, text in enumerate(words)
+    ]
+    transcript.segments = [segment]
+    return transcript
+
+
+def test_transcript_keeps_its_segments_and_words_in_order(db):
+    project = saved_project(db)
+    transcript = make_transcript(project, saved_asset(db, project), words=("Bom", "dia", "a", "todos"))
+    db.add(transcript)
+    db.commit()
+    db.expire_all()
+
+    stored = db.get(Transcript, transcript.id)
+    assert stored.ai_generated is True
+    assert [word.text for word in stored.segments[0].words] == ["Bom", "dia", "a", "todos"]
+
+
+def test_a_media_asset_has_only_one_transcript(db):
+    project = saved_project(db)
+    asset = saved_asset(db, project)
+    db.add(make_transcript(project, asset))
+    db.commit()
+
+    db.add(make_transcript(project, asset))
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+
+def test_deleting_a_media_asset_removes_its_transcript(db):
+    project = saved_project(db)
+    asset = saved_asset(db, project)
+    db.add(make_transcript(project, asset))
+    db.commit()
+
+    db.delete(asset)
+    db.commit()
+
+    assert (count(db, Transcript), count(db, TranscriptSegment), count(db, TranscriptWord)) == (0, 0, 0)
+
+
+def test_two_words_of_a_transcript_cannot_share_a_position(db):
+    project = saved_project(db)
+    transcript = make_transcript(project, saved_asset(db, project))
+    transcript.segments[0].words[1].position = 0
+    db.add(transcript)
+
+    with pytest.raises(IntegrityError):
         db.commit()

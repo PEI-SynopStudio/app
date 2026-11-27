@@ -15,7 +15,7 @@ from app.core.config import (
     AuditAction,
 )
 from app.database.base import utc_now
-from app.database.models import Clip, Project
+from app.database.models import Clip, Project, User
 from app.schemas.clip import ClipCreate, ClipUpdate
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import get_project
@@ -25,19 +25,19 @@ class ClipNotFoundError(LookupError):
     pass
 
 
-def list_clips(db: Session, project_id: str, owner_id: Optional[str] = None) -> List[Clip]:
+def list_clips(db: Session, project_id: str) -> List[Clip]:
     """The clips of a project in their order."""
-    return list(get_project(db, project_id, owner_id).clips)
+    return list(get_project(db, project_id).clips)
 
 
-def get_clip(db: Session, project_id: str, clip_id: str, owner_id: Optional[str] = None) -> Clip:
-    return _find_clip(db, get_project(db, project_id, owner_id), clip_id)
+def get_clip(db: Session, project_id: str, clip_id: str) -> Clip:
+    return _find_clip(db, get_project(db, project_id), clip_id)
 
 
 # Add a clip made of parts of the original video; it goes to the end of the project's list.
 # Source: MS2 FR10 (clip proposals), FR11 (link to the source position), FR12 (editing); FR18 (audit).
-def create_clip(db: Session, project_id: str, data: ClipCreate, owner_id: Optional[str] = None) -> Clip:
-    project = get_project(db, project_id, owner_id)
+def create_clip(db: Session, project_id: str, data: ClipCreate, actor: Optional[User] = None) -> Clip:
+    project = get_project(db, project_id)
     last = db.scalar(select(func.max(Clip.position)).where(Clip.project_id == project.id))
     clip = Clip(
         project_id=project.id,
@@ -49,7 +49,11 @@ def create_clip(db: Session, project_id: str, data: ClipCreate, owner_id: Option
     db.add(clip)
     db.flush()  # assigns the ID the audit entry refers to
     record_audit(
-        db, project.id, AuditAction.CLIP_CREATED, {AUDIT_DETAIL_CLIP_ID: str(clip.id), **data.model_dump(mode=JSON_DUMP_MODE)}
+        db,
+        project.id,
+        AuditAction.CLIP_CREATED,
+        {AUDIT_DETAIL_CLIP_ID: str(clip.id), **data.model_dump(mode=JSON_DUMP_MODE)},
+        actor=actor,
     )
     _touch(project)
     db.commit()
@@ -59,9 +63,9 @@ def create_clip(db: Session, project_id: str, data: ClipCreate, owner_id: Option
 # Rename a clip, change its scenes (trim, reorder, remove) or the language of its subtitles.
 # Source: MS2 FR12, US21 (adjust start and end points, reorder or reject segments); FR18, US30 (history of changes).
 def update_clip(
-    db: Session, project_id: str, clip_id: str, data: ClipUpdate, owner_id: Optional[str] = None
+    db: Session, project_id: str, clip_id: str, data: ClipUpdate, actor: Optional[User] = None
 ) -> Clip:
-    project = get_project(db, project_id, owner_id)
+    project = get_project(db, project_id)
     clip = _find_clip(db, project, clip_id)
     values = data.model_dump(exclude_unset=True)
     changed = {field for field, value in values.items() if getattr(clip, field) != value}
@@ -74,6 +78,7 @@ def update_clip(
             project.id,
             AuditAction.CLIP_UPDATED,
             {AUDIT_DETAIL_CLIP_ID: str(clip.id), AUDIT_DETAIL_CHANGES: data.model_dump(mode=JSON_DUMP_MODE, include=changed)},
+            actor=actor,
         )
         _touch(project)
         db.commit()
@@ -82,14 +87,15 @@ def update_clip(
 
 # Delete a clip; the audit log keeps its title and scenes.
 # Source: MS2 FR18, US30 (history of the editorial decisions of each clip).
-def delete_clip(db: Session, project_id: str, clip_id: str, owner_id: Optional[str] = None) -> None:
-    project = get_project(db, project_id, owner_id)
+def delete_clip(db: Session, project_id: str, clip_id: str, actor: Optional[User] = None) -> None:
+    project = get_project(db, project_id)
     clip = _find_clip(db, project, clip_id)
     record_audit(
         db,
         project.id,
         AuditAction.CLIP_DELETED,
         {AUDIT_DETAIL_CLIP_ID: str(clip.id), **{field: getattr(clip, field) for field in AUDIT_CLIP_FIELDS}},
+        actor=actor,
     )
     db.delete(clip)
     _touch(project)

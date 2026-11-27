@@ -8,6 +8,8 @@ from app.core.config import AuditAction
 from app.database.models import AuditLog
 from app.main import app
 from test_api_projects import PROJECT_BODY, age
+from app.services.auth.auth import actor_hash
+from conftest import sign_in
 
 CLIP_BODY = {
     "title": "The Question That Changed Everything",
@@ -17,8 +19,8 @@ SCENES = [{"start": 312.0, "end": 326.0}, {"start": 340.0, "end": 356.5}]
 
 
 @pytest.fixture
-def client(db_override):
-    yield TestClient(app)
+def client(db_override, session_factory, user):
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
@@ -52,12 +54,12 @@ def test_a_clip_keeps_its_scenes_in_the_order_they_play(client, project_id):
     assert client.get(f"{clips_url(project_id)}/{clip['id']}").json() == clip
 
 
-def test_creating_a_clip_is_audited(client, project_id, db):
+def test_creating_a_clip_is_audited(client, project_id, db, user):
     clip = new_clip(client, project_id)
 
     [entry] = audit(db, AuditAction.CLIP_CREATED)
     assert entry.details == {"clip_id": clip["id"], "title": CLIP_BODY["title"], "scenes": SCENES, "subtitle_language": None}
-
+    assert entry.actor_hash == actor_hash(user.id)
 
 def test_new_clips_go_to_the_end_of_the_project(client, project_id):
     ids = [new_clip(client, project_id, title=f"Clip {number}")["id"] for number in range(3)]

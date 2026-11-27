@@ -39,14 +39,30 @@ DEFAULT_MAX_DOCUMENTS_PER_PROJECT = 10
 
 DEFAULT_LOG_LEVEL = "INFO"
 LIST_SEPARATOR = ","
-DEFAULT_WHISPER_MODEL = "openai/whisper-large-v3-turbo"
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+DEFAULT_WHISPER_DEVICE = "cpu"
+DEFAULT_WHISPER_COMPUTE_TYPE = "int8"
+DEFAULT_SPEECH_CPU_THREADS = 4
+DEFAULT_SPEECH_MODELS_DIR = "/data/models"
 DEFAULT_LANGUAGE = "pt"
 DEFAULT_DATABASE_URL = "postgresql+psycopg2://pei:pei@postgres:5432/pei"
 DEFAULT_DATABASE_ECHO = "false"
 ENV_TRUE_VALUE = "true"
+# A session in use renews itself after half of this, so it never expires while the user waits (WCAG 2.2.1).
+DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600
+# Local development runs over plain HTTP; behind TLS, set SESSION_COOKIE_SECURE=true.
+DEFAULT_SESSION_COOKIE_SECURE = "false"
 
-
-
+DEFAULT_KEYCLOAK_PUBLIC_URL = "http://localhost:8080"
+DEFAULT_KEYCLOAK_INTERNAL_URL = "http://keycloak:8080"
+DEFAULT_KEYCLOAK_REALM = "synopstudio"
+DEFAULT_KEYCLOAK_CLIENT_ID = "synopstudio-backend"
+DEFAULT_KEYCLOAK_CLIENT_SECRET = "pei-dev-client-secret"
+DEFAULT_APP_PUBLIC_URL = "http://localhost:5173"
+DEFAULT_API_PUBLIC_PATH = "/api"
+DEFAULT_IDP_TIMEOUT_SECONDS = 10
+DEFAULT_LOGIN_REQUEST_TTL_SECONDS = 10 * 60
+DEFAULT_REAUTH_MAX_AGE_SECONDS = 5 * 60
 
 # --- Storage layout ---
 PROJECTS_DIR = "projects"
@@ -84,10 +100,16 @@ WAVEFORM_CONTENT_TYPE = "application/json"
 # --- Error messages ---
 ERROR_INVALID_PROJECT_ID = "Invalid project ID: {project_id!r}"
 ERROR_PROJECT_NOT_FOUND = "Project not found: {project_id}"
-ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while an ingestion is running."
+ERROR_PROJECT_BUSY = "Project {project_id} cannot be deleted while a job is running."
 ERROR_LICENCE_NOT_CONFIRMED = (
     "Ingestion refused: the project licence and authorship must be confirmed first."
 )
+ERROR_NOT_AUTHENTICATED = "Sign in to continue."
+ERROR_ACCOUNT_BUSY = "The account cannot be deleted while an ingestion is running in one of its projects."
+ERROR_IDENTITY_PROVIDER_UNAVAILABLE = "The sign-in service is unavailable; please try again."
+LOG_IDENTITY_PROVIDER_UNAVAILABLE = "Identity provider request failed"
+LOG_IDENTITY_PROVIDER_LOGOUT_FAILED = "Could not end the identity provider session"
+LOG_LOGIN_REJECTED = "Sign-in rejected: %s"
 
 # --- Project documents ---
 JSON_DUMP_MODE = "json"
@@ -161,7 +183,12 @@ PROJECT_JOB_ROUTE = "/{project_id}/jobs"
 JOB_ROUTE = "/{project_id}/jobs/{job_id}"
 JOB_CANCEL_ROUTE= "/{project_id}/jobs/{job_id}/cancel"
 PROGRESS_WS_ROUTE = "/{project_id}/progress"
-
+TRANSCRIPTS_ROUTE_TAG = "transcripts"
+TRANSCRIPT_ROUTE = "/{project_id}/transcript"
+TRANSCRIPTION_ROUTE = "/{project_id}/transcription"
+ERROR_TRANSCRIPT_NOT_FOUND = "Project {project_id} has no transcript yet."
+ERROR_TRANSCRIPT_RANGE = "end must be after start."
+ERROR_TRANSCRIPT_ALREADY_EXISTS = "The video of project {project_id} is already transcribed."
 
 CLIPS_ROUTE_TAG = "clips"
 CLIPS_ROUTE = "/{project_id}/clips"
@@ -174,6 +201,22 @@ DOCUMENT_ROUTE = "/{project_id}/documents/{document_id}"
 
 # Application close codes start at 4000; 4404 mirrors the HTTP 404.
 WS_CLOSE_PROJECT_NOT_FOUND = 4404
+WS_CLOSE_NOT_AUTHENTICATED = 4401
+AUTH_ROUTE_PREFIX = "/auth"
+AUTH_ROUTE_TAG = "auth"
+REGISTER_ROUTE = "/register"
+LOGIN_ROUTE = "/login"
+LOGOUT_ROUTE = "/logout"
+LOGOUT_ALL_ROUTE = "/logout-all"
+ME_ROUTE = "/me"
+CALLBACK_ROUTE = "/callback"
+ACCOUNT_ROUTE = "/account"
+USER_AGENT_HEADER = "user-agent"
+SESSION_COOKIE_NAME = "synopstudio_session"
+LOGIN_COOKIE_NAME = "synopstudio_login"
+SESSION_COOKIE_PATH = "/"
+# Lax: the cookie is not sent with requests that other sites start (forms, scripts, images).
+SESSION_COOKIE_SAMESITE = "lax"
 ASGI_WEBSOCKET_DISCONNECT = "websocket.disconnect"
 PROGRESS_QUEUE_SIZE = 1
 FILE_NAME_MIN_LENGTH = 1
@@ -201,6 +244,8 @@ LOG_UPLOAD_DISCARD_FAILED = "Could not discard the rejected upload of project %s
 # --- Job dispatch and events ---
 MEDIA_INGESTED_EVENT = "media.ingested"
 ERROR_INGESTION_ALREADY_RUNNING = "An ingestion is already running for project {project_id}."
+ERROR_TRANSCRIPTION_ALREADY_RUNNING = "A transcription is already running for project {project_id}."
+ERROR_INGESTION_DURING_TRANSCRIPTION = "The video of project {project_id} cannot be replaced while it is being transcribed."
 LOG_JOB_DISPATCH_FAILED = "Job %s could not be dispatched"
 ERROR_JOB_DISPATCH_FAILED = "The job could not be queued; please try again."
 
@@ -219,15 +264,23 @@ DEAD_LETTER_MAX_LENGTH = 1000
 DEAD_LETTER_TTL_MS = 7*24*3600*1000
 MEDIA_EVENTS_EXCHANGE = "media_events"
 MEDIA_INGESTED_QUEUE = "media.ingested"
+TRANSCRIPT_READY_EVENT = "transcript.ready"
+TRANSCRIPT_READY_QUEUE = "transcript.ready"
 EVENT_CONSUMER_PREFETCH = 1
 EVENT_CONSUMER_RETRY_SECONDS = 5.0
 LOG_EVENT_CONSUMER_UNAVAILABLE = "Job event consumer cannot reach the broker or the database, retrying: %s"
 LOG_EVENT_INVALID = "Invalid job event discarded: %s"
 LOG_EVENT_UNKNOWN_JOB = "Event for unknown job %s discarded"
 LOG_EVENT_NOT_APPLIED = "Event of job %s could not be applied"
+LOG_MEDIA_EVENT_INVALID = "Invalid media event discarded: %s"
+LOG_TRIGGER_UNAVAILABLE = "Transcription trigger cannot reach the broker or the database, retrying: %s"
+LOG_TRANSCRIPTION_ALREADY_REQUESTED = "Transcription of ingestion job %s already requested; event ignored"
+LOG_TRANSCRIPTION_NOT_STARTED = "Transcription of ingestion job %s not started: %s"
+LOG_TRANSCRIPTION_NO_VIDEO = "Ingestion job %s has no video left to transcribe; event ignored"
+LOG_TRIGGER_FAILED = "Media event of ingestion job %s could not be handled"
 ERROR_JOB_STALLED = "The job stopped reporting progress; please submit it again."
+LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s), %d expired session(s)"
 ERROR_JOB_QUEUED_STALLED = "The job never started processing; please submit it again."
-LOG_SWEEP_DONE = "Sweep closed %d stalled job(s), %d abandoned upload(s)"
 LOG_SWEEP_FAILED = "Periodic sweep failed"
 LOG_SWEEP_PURGE_FAILED = "Abandoned uploads could not be removed"
 BROKER_CONTENT_TYPE = "application/json"
@@ -377,6 +430,60 @@ ERROR_NO_VIDEO_STREAM = "Video rejected: does not contain any video stream."
 ERROR_PROXY_FAILED = "Failed to generate proxy video: {details}"
 ERROR_KEYFRAME_INDEX_FAILED = "Failed to build the keyframe index: {details}"
 
+# --- Speech processing: faster-whisper and wav2vec2 ---
+# Library defaults made explicit, so every transcript records the exact parameters it was made with.
+WHISPER_BEAM_SIZE = 5
+WHISPER_NO_SPEECH_THRESHOLD = 0.6
+WHISPER_COMPRESSION_RATIO_THRESHOLD = 2.4
+WHISPER_LOG_PROB_THRESHOLD = -1.0
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
+WHISPER_VAD_PARAMETERS = {
+    "threshold": 0.5,
+    "min_speech_duration_ms": 0,
+    "min_silence_duration_ms": 2000,
+    "speech_pad_ms": 400,
+}
+TRANSCRIPTION_WINDOW_SECONDS = 600
+ALIGNMENT_MODELS = {
+    "pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+}
+LANGUAGE_SUBTAG_SEPARATOR = "-"
+ALIGNMENT_MODEL_FILES = ("*.json", "*.safetensors", "pytorch_model.bin")
+ERROR_SPEECH_MODEL_UNAVAILABLE = "Speech model {model!r} could not be loaded: {details}"
+ERROR_NO_ALIGNMENT_MODEL = "No alignment model is configured for language {language!r}."
+LOG_SPEECH_MODEL_LOADED = "Speech model %s loaded (revision %s)"
+CONFIDENCE_MIN = 0.0
+CONFIDENCE_MAX = 1.0
+TRANSCRIPT_COUNT_MIN = 0
+SEGMENT_MIN_WORDS = 1
+ERROR_TRANSCRIPT_TIME_ORDER = "Invalid interval: end ({end:.3f} s) is before start ({start:.3f} s)."
+TRANSCRIPTION_CUT_SEARCH_SECONDS = 5.0
+TRANSCRIPTION_CUT_FRAME_SECONDS = 0.02
+TRANSCRIPTION_CUT_PAUSE_SECONDS = 0.2
+PCM_NUMPY_DTYPE = "<i2"
+PCM_SAMPLE_WIDTH_BYTES = 2
+ERROR_UNEXPECTED_WAV_FORMAT = (
+    "Expected a {rate} Hz mono 16-bit WAV, got {actual_rate} Hz, {channels} channel(s), "
+    "{width}-byte samples: {path}"
+)
+WHISPER_MAX_IDENTICAL_SEGMENTS = 2
+ERROR_TRANSCRIPTION_FAILED = "faster-whisper could not transcribe the audio: {details}"
+ALIGNMENT_PAD_SECONDS = 0.5
+ERROR_ALIGNMENT_FAILED = "wav2vec2 could not align the words: {details}"
+TRANSCRIPT_TIME_DECIMALS = 3
+ERROR_NO_SPEECH_DETECTED = "No speech was detected in the audio."
+SPEECH_DIR = "speech"
+TRANSCRIPT_DIR = "transcript"
+TRANSCRIPT_FILE = "transcript.json"
+PARAMETER_WINDOW_SECONDS = "window_seconds"
+PARAMETER_CUT_SEARCH_SECONDS = "cut_search_seconds"
+PARAMETER_CUT_PAUSE_SECONDS = "cut_pause_seconds"
+PARAMETER_MAX_IDENTICAL_SEGMENTS = "max_identical_segments"
+PARAMETER_ALIGNMENT_PAD_SECONDS = "alignment_pad_seconds"
+ERROR_AUDIO_KEY_MISSING = "The job has no audio to transcribe."
+ERROR_TRANSCRIPTION_INTERNAL = "Unexpected error during transcription; see the worker logs."
+LOG_TRANSCRIPTION_FAILED = "Transcription failed for project %s"
+
 
 # --- Asynchronous jobs (T3.13) ---
 class JobTypeEnum(str, Enum):
@@ -420,6 +527,8 @@ class JobErrorCodeEnum(str, Enum):
     SILENT_AUDIO = "silent_audio"
     INTERNAL_ERROR = "internal_error"
     TIMEOUT = "timeout"
+    NO_SPEECH_DETECTED = "no_speech_detected"
+    MODEL_UNAVAILABLE = "model_unavailable"
 
 
 class AcousticProfileEnum(str, Enum):
@@ -457,7 +566,7 @@ LANGUAGE_CODE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
 PROGRESS_MIN = 0.0
 PROGRESS_MAX = 100.0
 FIRST_JOB_ATTEMPT = 1
-# Progress messages shown to the user for each step of each pipeline (FR02 outputs).
+# Progress messages shown to the user for each step of a pipeline (FR02 and FR04 outputs).
 JOB_STEP_MESSAGES = {
     JobTypeEnum.INGESTION: {
         JobStepProcessingEnum.INITIALIZING: "Preparing the video",
@@ -472,7 +581,6 @@ JOB_STEP_MESSAGES = {
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: "Preparing the transcription",
         JobStepProcessingEnum.TRANSCRIBING: "Transcribing the speech",
-        JobStepProcessingEnum.DIARIZING: "Identifying the speakers",
         JobStepProcessingEnum.PERSISTING_RESULTS: "Saving the transcript",
         JobStepProcessingEnum.CLEANING_UP: "Cleaning up temporary files",
         JobStepProcessingEnum.FINISHED: "Transcription completed",
@@ -497,8 +605,7 @@ JOB_STEP_WEIGHTS = {
     },
     JobTypeEnum.TRANSCRIPTION: {
         JobStepProcessingEnum.INITIALIZING: (0.0, 5.0),
-        JobStepProcessingEnum.TRANSCRIBING: (5.0, 65.0),
-        JobStepProcessingEnum.DIARIZING: (65.0, 90.0),
+        JobStepProcessingEnum.TRANSCRIBING: (5.0, 90.0),
         JobStepProcessingEnum.PERSISTING_RESULTS: (90.0, 95.0),
         JobStepProcessingEnum.CLEANING_UP: (95.0, 100.0),
         JobStepProcessingEnum.FINISHED: (100.0, 100.0),
@@ -541,6 +648,9 @@ class ProjectStatus(str, Enum):
     INGESTING = "ingesting"
     INGESTED = "ingested"
     INGESTION_FAILED = "ingestion_failed"
+    TRANSCRIBING = "transcribing"
+    TRANSCRIBED = "transcribed"
+    TRANSCRIPTION_FAILED = "transcription_failed"
 
 
 class AspectRatio(str, Enum):
@@ -589,6 +699,7 @@ TABLE_PROJECT_DOCUMENTS = "project_documents"
 FK_PROJECT_ID = f"{TABLE_PROJECTS}.id"
 FK_MEDIA_ASSET_ID = f"{TABLE_MEDIA_ASSETS}.id"
 DB_ON_DELETE_CASCADE = "CASCADE"
+DB_ON_DELETE_RESTRICT = "RESTRICT"
 DB_DELETE_ORPHAN_CASCADE = "all, delete-orphan"
 DB_NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -598,7 +709,6 @@ DB_NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 ENUM_COLUMN_LENGTH = 64
-OWNER_ID_MAX_LENGTH = 255
 PROJECT_AUTHOR_MAX_LENGTH = 300
 STORAGE_KEY_MAX_LENGTH = 1024
 STORAGE_UPLOAD_ID_MAX_LENGTH = 1024
@@ -609,13 +719,133 @@ TABLE_UPLOAD_SESSIONS = "upload_sessions"
 TABLE_JOBS = "jobs"
 TABLE_AUDIT_LOG = "audit_log"
 DB_ON_DELETE_SET_NULL = "SET NULL"
+TABLE_TRANSCRIPTS = "transcripts"
+TABLE_TRANSCRIPT_SEGMENTS = "transcript_segments"
+TABLE_TRANSCRIPT_WORDS = "transcript_words"
+FK_JOB_ID = f"{TABLE_JOBS}.id"
+FK_TRANSCRIPT_ID = f"{TABLE_TRANSCRIPTS}.id"
+FK_TRANSCRIPT_SEGMENT_ID = f"{TABLE_TRANSCRIPT_SEGMENTS}.id"
+TRANSCRIPT_SEGMENTS_TIME_INDEX = "ix_transcript_segments_transcript_id_start_seconds"
+TRANSCRIPT_WORDS_TIME_INDEX = "ix_transcript_words_transcript_id_start_seconds"
+LANGUAGE_CODE_MAX_LENGTH = 16
+MODEL_NAME_MAX_LENGTH = 255
+MODEL_REVISION_MAX_LENGTH = 64
 # A new ingestion replaces the assets in these statuses; uploads still in progress are kept.
 REPLACEABLE_ASSET_STATUSES = (MediaAssetStatus.READY, MediaAssetStatus.FAILED)
 JOB_ACTIVE_STATUSES = (JobStatusEnum.PENDING, JobStatusEnum.QUEUED, JobStatusEnum.PROCESSING)
 JOB_ACTIVE_INGESTION_INDEX = "uq_jobs_one_active_ingestion_per_project"
+JOB_ACTIVE_TRANSCRIPTION_INDEX = "uq_jobs_one_active_transcription_per_project"
 ACTOR_HASH_MAX_LENGTH = 64
 ERROR_AUDIT_LOG_IMMUTABLE = "Audit log entries cannot be changed or deleted."
 
+# --- Accounts and sessions (MS3 §1.1.2, §1.1.6, §1.4.1) ---
+TABLE_USERS = "users"
+TABLE_AUTH_SESSIONS = "auth_sessions"
+FK_USER_ID = f"{TABLE_USERS}.id"
+# The longest address SMTP accepts (RFC 5321).
+EMAIL_MAX_LENGTH = 254
+USER_NAME_MAX_LENGTH = 120
+SESSION_TOKEN_BYTES = 32
+# SHA-256 as hex.
+TOKEN_HASH_LENGTH = 64
+# Share of the lifetime after which a session in use gets a new full lifetime.
+SESSION_RENEW_FRACTION = 0.5
+# IPv6 in text form.
+IP_ADDRESS_MAX_LENGTH = 45
+USER_AGENT_MAX_LENGTH = 512
+# OpenID Connect identifiers ("sub", "sid") are at most 255 ASCII characters (OIDC Core 1.0 §2).
+SUBJECT_MAX_LENGTH = 255
+IDP_SESSION_ID_MAX_LENGTH = 255
+
+
+class AgeGroup(str, Enum):
+    """Age declared at registration; under 13 has no value, so it cannot register (MS3 §1.4.1)."""
+
+    ADULT = "adult"
+    MINOR_WITH_GUARDIAN_CONSENT = "minor_with_guardian_consent"
+
+# --- Sign-in through Keycloak: OpenID Connect authorization code flow with PKCE (RFC 6749, RFC 7636) ---
+OIDC_SCOPES = "openid profile email"
+OIDC_RESPONSE_TYPE = "code"
+OIDC_GRANT_AUTHORIZATION_CODE = "authorization_code"
+OIDC_GRANT_CLIENT_CREDENTIALS = "client_credentials"
+PKCE_METHOD = "S256"
+# Keycloak signs ID tokens with RS256 unless the realm is changed; any other algorithm is refused.
+ID_TOKEN_ALGORITHMS = ("RS256",)
+# Random bytes behind state, nonce and the PKCE verifier; 64 bytes give an 86-character verifier (43–128 allowed).
+LOGIN_STATE_BYTES = 32
+LOGIN_NONCE_BYTES = 32
+PKCE_VERIFIER_BYTES = 64
+# prompt=create opens the registration page (Keycloak 26.1+); prompt=login with max_age=0 forces a new password entry.
+OIDC_PROMPT_CREATE = "create"
+OIDC_PROMPT_LOGIN = "login"
+OIDC_REAUTH_MAX_AGE = "0"
+
+# Keycloak paths, relative to KEYCLOAK_PUBLIC_URL or KEYCLOAK_INTERNAL_URL.
+KEYCLOAK_ISSUER_PATH = "/realms/{realm}"
+KEYCLOAK_DISCOVERY_PATH = "/realms/{realm}/.well-known/openid-configuration"
+KEYCLOAK_ACCOUNT_PATH = "/realms/{realm}/account"
+KEYCLOAK_ADMIN_USER_PATH = "/admin/realms/{realm}/users/{user_id}"
+KEYCLOAK_ADMIN_USER_LOGOUT_PATH = "/admin/realms/{realm}/users/{user_id}/logout"
+KEYCLOAK_ADMIN_SESSION_PATH = "/admin/realms/{realm}/sessions/{session_id}"
+
+# ID token claims read by the backend; age_group and roles come from the mappers in the realm file.
+CLAIM_SUBJECT = "sub"
+CLAIM_EMAIL = "email"
+CLAIM_NAME = "name"
+CLAIM_NONCE = "nonce"
+CLAIM_SESSION_ID = "sid"
+CLAIM_AUTH_TIME = "auth_time"
+CLAIM_AGE_GROUP = "age_group"
+CLAIM_ROLES = "roles"
+ADMIN_ROLE = "admin"
+
+# After a failed sign-in the browser goes back to the frontend login page with ?error=<code>.
+FRONTEND_LOGIN_PATH = "/login"
+FRONTEND_DEFAULT_NEXT_PATH = "/app"
+LOGIN_ERROR_QUERY_PARAM = "error"
+
+
+class LoginErrorCode(str, Enum):
+    """Why a sign-in did not finish; the frontend shows a message for each code."""
+
+    LOGIN_FAILED = "login_failed"
+    LOGIN_CANCELLED = "login_cancelled"
+    AGE_GROUP_MISSING = "age_group_missing"
+    IDENTITY_PROVIDER_UNAVAILABLE = "identity_provider_unavailable"
+
+
+# Code the frontend reads on a 403 to start a fresh sign-in before deleting the account.
+REAUTHENTICATION_REQUIRED_CODE = "reauthentication_required"
+
+# Claims every ID token must carry; a token without one of them is refused.
+ID_TOKEN_REQUIRED_CLAIMS = ("exp", "iat", "iss", "aud", "sub", "nonce", "auth_time")
+# Base64url without padding, as PKCE requires (RFC 7636 §4.2).
+BASE64_PADDING = "="
+# The service-account token is renewed this long before it expires, so no Admin API call carries an expired one.
+ADMIN_TOKEN_REFRESH_MARGIN_SECONDS = 30
+AUTHORIZATION_HEADER = "Authorization"
+# Since Keycloak 26.8.2 the Admin API only accepts tokens with this scope (its audience check).
+KEYCLOAK_ADMIN_API_SCOPE = "kc-admin-api"
+BEARER_TOKEN_FORMAT = "Bearer {token}"
+# Characters left as they are when a value becomes one URL path segment: none, so "/" and ".." cannot change the path.
+URL_SEGMENT_SAFE_CHARACTERS = ""
+# Why a sign-in was refused; only logged, the browser gets a LoginErrorCode.
+LOGIN_REASON_CODE_REFUSED = "Keycloak refused the authorization code"
+LOGIN_REASON_MISSING_ID_TOKEN = "the token response has no ID token"
+LOGIN_REASON_INVALID_ID_TOKEN = "the ID token is invalid: {error}"
+LOGIN_REASON_UNKNOWN_KEY = "the ID token is signed with an unknown key"
+LOGIN_REASON_NONCE_MISMATCH = "the ID token nonce does not match the sign-in"
+LOGIN_REASON_MISSING_EMAIL = "the ID token has no email"
+LOGIN_REASON_AGE_GROUP = "the account has no valid age group"
+LOGIN_REASON_ACCOUNT_CONFLICT = "another account already has this email or subject"
+LOGIN_REASON_STATE_MISMATCH = "the callback does not belong to a sign-in started in this browser"
+LOGIN_REASON_RETURNED_ERROR = "Keycloak returned the error {error!r}"
+# Where to go after signing in: only a path on this site, so the login cannot redirect to another one.
+NEXT_QUERY_PARAM = "next"
+NEXT_PATH_PREFIX = "/"
+# Browsers read a backslash as "/", so a backslash after the first "/" would leave the site like "//".
+NEXT_PATH_FORBIDDEN_CHARACTERS = "\\"
 
 class AuditAction(str, Enum):
     PROJECT_CREATED = "project.created"
@@ -625,6 +855,9 @@ class AuditAction(str, Enum):
     INGESTION_COMPLETED = "ingestion.completed"
     INGESTION_CANCELLED = "ingestion.cancelled"
     INGESTION_FAILED = "ingestion.failed"
+    TRANSCRIPTION_REQUESTED = "transcription.requested"
+    TRANSCRIPTION_COMPLETED = "transcription.completed"
+    TRANSCRIPTION_FAILED = "transcription.failed"
     PROJECT_DELETED = "project.deleted"
     PROJECT_UPDATED = "project.updated"
     DOCUMENT_ADDED = "document.added"
@@ -647,6 +880,11 @@ AUDIT_DETAIL_DOCUMENT_ID = "document_id"
 AUDIT_DETAIL_CHANGES = "changes"
 # Clip fields copied to the audit log when a clip is deleted, so its history shows what was removed (US30).
 AUDIT_CLIP_FIELDS = ("title", "scenes")
+AUDIT_TRANSCRIPTION_FIELDS = {"language", "model_name", "model_revision", "alignment_model_name", "alignment_model_revision", "word_count"}
+ERROR_TRANSCRIPT_COUNT_MISMATCH = (
+    "The stored transcript holds {segments} segment(s) and {words} word(s), "
+    "but the worker reported {expected_segments} and {expected_words}."
+)
 # Fields of a finished ingestion that are copied to its media asset (FR02 step 6).
 ASSET_METADATA_FIELDS = (
     "container",
@@ -696,13 +934,29 @@ class Settings:
     job_download_stalled_after_seconds: int
     log_level: str
     whisper_model: str
+    whisper_device: str
+    whisper_compute_type: str
+    speech_cpu_threads: int
+    speech_models_dir: Path
     default_language: str
     database_url: str
     database_echo: bool
+    session_ttl_seconds: int
+    session_cookie_secure: bool
     job_queued_stalled_after_seconds: int
     allowed_document_extensions: Tuple[str, ...]
     max_document_bytes: int
     max_documents_per_project: int
+    keycloak_public_url: str
+    keycloak_internal_url: str
+    keycloak_realm: str
+    keycloak_client_id: str
+    keycloak_client_secret: str
+    app_public_url: str
+    api_public_path: str
+    idp_timeout_seconds: int
+    login_request_ttl_seconds: int
+    reauth_max_age_seconds: int
 
 
 @lru_cache
@@ -735,6 +989,10 @@ def get_settings() -> Settings:
         ),
         log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         whisper_model=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        whisper_device=os.environ.get("WHISPER_DEVICE", DEFAULT_WHISPER_DEVICE),
+        whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", DEFAULT_WHISPER_COMPUTE_TYPE),
+        speech_cpu_threads=int(os.environ.get("SPEECH_CPU_THREADS", DEFAULT_SPEECH_CPU_THREADS)),
+        speech_models_dir=Path(os.environ.get("SPEECH_MODELS_DIR", DEFAULT_SPEECH_MODELS_DIR)),
         default_language=os.environ.get("DEFAULT_LANGUAGE", DEFAULT_LANGUAGE),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         database_echo=os.environ.get("DATABASE_ECHO", DEFAULT_DATABASE_ECHO).lower() == ENV_TRUE_VALUE,
@@ -743,4 +1001,20 @@ def get_settings() -> Settings:
         max_documents_per_project=int(
             os.environ.get("MAX_DOCUMENTS_PER_PROJECT", DEFAULT_MAX_DOCUMENTS_PER_PROJECT)
         ),
+        session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS)),
+        session_cookie_secure=(
+            os.environ.get("SESSION_COOKIE_SECURE", DEFAULT_SESSION_COOKIE_SECURE).lower() == ENV_TRUE_VALUE
+        ),
+        keycloak_public_url=os.environ.get("KEYCLOAK_PUBLIC_URL", DEFAULT_KEYCLOAK_PUBLIC_URL),
+        keycloak_internal_url=os.environ.get("KEYCLOAK_INTERNAL_URL", DEFAULT_KEYCLOAK_INTERNAL_URL),
+        keycloak_realm=os.environ.get("KEYCLOAK_REALM", DEFAULT_KEYCLOAK_REALM),
+        keycloak_client_id=os.environ.get("KEYCLOAK_CLIENT_ID", DEFAULT_KEYCLOAK_CLIENT_ID),
+        keycloak_client_secret=os.environ.get("KEYCLOAK_CLIENT_SECRET", DEFAULT_KEYCLOAK_CLIENT_SECRET),
+        app_public_url=os.environ.get("APP_PUBLIC_URL", DEFAULT_APP_PUBLIC_URL),
+        api_public_path=os.environ.get("API_PUBLIC_PATH", DEFAULT_API_PUBLIC_PATH),
+        idp_timeout_seconds=int(os.environ.get("IDP_TIMEOUT_SECONDS", DEFAULT_IDP_TIMEOUT_SECONDS)),
+        login_request_ttl_seconds=int(
+            os.environ.get("LOGIN_REQUEST_TTL_SECONDS", DEFAULT_LOGIN_REQUEST_TTL_SECONDS)
+        ),
+        reauth_max_age_seconds=int(os.environ.get("REAUTH_MAX_AGE_SECONDS", DEFAULT_REAUTH_MAX_AGE_SECONDS)),
     )

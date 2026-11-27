@@ -10,6 +10,8 @@ from app.main import app
 from app.services.storage.object_storage import get_object_storage
 from in_memory_object_storage import InMemoryObjectStorage, UnavailableObjectStorage
 from test_api_projects import PROJECT_BODY
+from app.services.auth.auth import actor_hash
+from conftest import sign_in
 
 SLIDES = ("slides.pdf", b"%PDF-1.7 slides", "application/pdf")
 
@@ -20,9 +22,9 @@ def object_storage():
 
 
 @pytest.fixture
-def client(db_override, object_storage):
+def client(db_override, object_storage, session_factory, user):
     app.dependency_overrides[get_object_storage] = lambda: object_storage
-    yield TestClient(app)
+    yield sign_in(TestClient(app), session_factory, user)
     app.dependency_overrides.clear()
 
 
@@ -52,7 +54,7 @@ def document_count(db):
     return db.scalar(select(func.count()).select_from(ProjectDocument))
 
 
-def test_a_document_is_stored_under_a_server_chosen_key(client, project_id, object_storage, db):
+def test_a_document_is_stored_under_a_server_chosen_key(client, project_id, object_storage, db, user):
     response = upload(client, project_id)
 
     assert response.status_code == 201
@@ -66,6 +68,7 @@ def test_a_document_is_stored_under_a_server_chosen_key(client, project_id, obje
     assert client.get(f"/projects/{project_id}").json()["documents"] == [document]
     [entry] = db.scalars(select(AuditLog).where(AuditLog.action == AuditAction.DOCUMENT_ADDED)).all()
     assert entry.details == {"document_id": document["id"], "file_name": "slides.pdf", "size_bytes": 15}
+    assert entry.actor_hash == actor_hash(user.id)
 
 
 @pytest.mark.parametrize("file_name, file_type", [("notes.txt", "txt"), ("Paper.DOCX", "docx"), ("deck.pptx", "pptx")])

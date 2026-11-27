@@ -5,6 +5,7 @@ services:
       - "5173:5173"
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      API_PROXY_TARGET: http://backend:8000
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -20,6 +21,11 @@ services:
       S3_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-pei}
       S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
       S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
     volumes:
       - ./backend:/app
       - media_data:/data/media
@@ -49,6 +55,30 @@ services:
       seaweedfs:
         condition: service_healthy
 
+  speech-worker:
+    build: ./backend
+    environment:
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://pei:pei@rabbitmq:5672/}
+      S3_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-pei}
+      S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      SPEECH_CPU_THREADS: ${SPEECH_CPU_THREADS:-4}
+      SPEECH_MODELS_DIR: ${SPEECH_MODELS_DIR:-/data/models}
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-pt}
+    volumes:
+      - ./backend:/app
+      - media_data:/data/media
+      - speech_models:/data/models
+    command: python -m app.workers.speech_worker
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -56,9 +86,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pei}
       POSTGRES_DB: ${POSTGRES_DB:-pei}
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pei -d pei"]
       interval: 5s
@@ -97,9 +128,41 @@ services:
       timeout: 5s
       retries: 10
 
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: start-dev --import-realm
+    ports:
+      - "8080:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER:-pei}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-pei}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+
 volumes:
   postgres_data:
   rabbitmq_data:
   seaweedfs_data:
   media_data:
+  speech_models:
   frontend_node_modules:

@@ -6,6 +6,7 @@ import aio_pika
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import sign_in
 from app.core.config import JobErrorCodeEnum, JobStatusEnum, JobStepProcessingEnum, JobTypeEnum
 from app.database.models import Job
 from app.main import app
@@ -67,7 +68,7 @@ def failed_run(job_id):
 
 
 @pytest.fixture
-def stack(queues, db_override):
+def stack(queues, db_override, session_factory, user):
     """The API wired to the real broker and the test queues.
 
     The client is not entered, so the lifespan does not start a consumer on the development broker.
@@ -77,7 +78,7 @@ def stack(queues, db_override):
     app.dependency_overrides[get_object_storage] = lambda: None
     app.dependency_overrides[get_dispatcher] = lambda: RabbitMQDispatcher(TEST_RABBITMQ_URL)
     app.dependency_overrides[get_progress_hub] = lambda: hub
-    yield TestClient(app), hub
+    yield sign_in(TestClient(app), session_factory, user), hub
     app.dependency_overrides.clear()
 
 

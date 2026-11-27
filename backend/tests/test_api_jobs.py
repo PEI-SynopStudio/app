@@ -12,18 +12,26 @@ from app.schemas.job import IngestionParams
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
 from app.services.workflow.jobs import create_ingestion_job, queue_job
+from conftest import sign_in
 from app.services.workflow.progress_hub import JobProgressHub, get_progress_hub
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 
 
 @pytest.fixture
-def client(db_override):
+def client(db_override, session_factory, user):
+    yield sign_in(TestClient(app), session_factory, user)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def anonymous(db_override):
+    """A browser with no session."""
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
-def queued_job(db):
+def queued_job(db, owner=None):
     project = create_project(db, ProjectCreate(
         title="Debate",
         author="University of Aveiro",
@@ -33,13 +41,13 @@ def queued_job(db):
         copyright_notice="CC BY 4.0",
         licence_confirmed=True,
         authorship_confirmed=True,
-    ))
+    ), owner)
     params = IngestionParams(source_url=SAMPLE_URL)
     return queue_job(db, create_ingestion_job(db, str(project.id), params, SAMPLE_URL))
 
 
-def test_job_can_be_read(client, db):
-    job = queued_job(db)
+def test_job_can_be_read(client, db, user):
+    job = queued_job(db, user)
 
     response = client.get(f"/projects/{job.project_id}/jobs/{job.id}")
 
@@ -47,16 +55,16 @@ def test_job_can_be_read(client, db):
     assert (response.json()["job_id"], response.json()["status"]) == (str(job.id), "queued")
 
 
-def test_unknown_job_is_not_found(client, db):
-    assert client.get(f"/projects/{queued_job(db).project_id}/jobs/{uuid.uuid4()}").status_code == 404
+def test_unknown_job_is_not_found(client, db, user):
+    assert client.get(f"/projects/{queued_job(db, user).project_id}/jobs/{uuid.uuid4()}").status_code == 404
 
 
-def test_job_of_another_project_is_not_found(client, db):
-    assert client.get(f"/projects/{uuid.uuid4()}/jobs/{queued_job(db).id}").status_code == 404
+def test_job_of_another_project_is_not_found(client, db, user):
+    assert client.get(f"/projects/{uuid.uuid4()}/jobs/{queued_job(db, user).id}").status_code == 404
 
 
-def test_invalid_job_id_is_rejected(client, db):
-    assert client.get(f"/projects/{queued_job(db).project_id}/jobs/not-a-uuid").status_code == 422
+def test_invalid_job_id_is_rejected(client, db, user):
+    assert client.get(f"/projects/{queued_job(db, user).project_id}/jobs/not-a-uuid").status_code == 422
 
 
 def test_restarting_the_api_leaves_the_jobs_alone(session_factory, db, monkeypatch):
@@ -71,10 +79,10 @@ def test_restarting_the_api_leaves_the_jobs_alone(session_factory, db, monkeypat
     assert db.get(Job, job.id).status == JobStatusEnum.QUEUED
     
 
-def test_job_can_be_cancelled_and_notifies_watchers(client, db):
+def test_job_can_be_cancelled_and_notifies_watchers(client, db, user):
     hub = JobProgressHub()
     app.dependency_overrides[get_progress_hub] = lambda: hub
-    job = queued_job(db)
+    job = queued_job(db, user)
     with hub.watch(job.project_id) as updates:
         response = client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel")
         update = updates.get_nowait()
@@ -84,25 +92,25 @@ def test_job_can_be_cancelled_and_notifies_watchers(client, db):
     assert (update.job_id, update.status) == (job.id, JobStatusEnum.CANCELLED)
 
 
-def test_cancelling_finished_job_conflicterror(client, db):
-    job = queued_job(db)
+def test_cancelling_finished_job_conflicterror(client, db, user):
+    job = queued_job(db, user)
     assert client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel").status_code == 200
     
     second = client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel")
     assert second.status_code == 409
 
 
-def test_cancelling_unknown_job_notfounderror(client, db):
-    job = queued_job(db)
+def test_cancelling_unknown_job_notfounderror(client, db, user):
+    job = queued_job(db, user)
     assert client.post(f"/projects/{job.project_id}/jobs/{uuid.uuid4()}/cancel").status_code == 404
 
 
-def test_cancelling_with_invalid_jobid_rejectederror(client, db):
-    job = queued_job(db)
+def test_cancelling_with_invalid_jobid_rejectederror(client, db, user):
+    job = queued_job(db, user)
     assert client.post(f"/projects/{job.project_id}/jobs/not-a-uuid/cancel").status_code == 422
 
-def test_project_jobs_are_listed_newest_first(client, db):
-    first = queued_job(db)
+def test_project_jobs_are_listed_newest_first(client, db, user):
+    first = queued_job(db, user)
     client.post(f"/projects/{first.project_id}/jobs/{first.id}/cancel")
     second = queue_job(
         db, create_ingestion_job(db, str(first.project_id), IngestionParams(source_url=SAMPLE_URL), SAMPLE_URL)
@@ -115,7 +123,7 @@ def test_project_jobs_are_listed_newest_first(client, db):
 def test_listing_jobs_of_unknown_project_is_not_found(client):
     assert client.get(f"/projects/{uuid.uuid4()}/jobs").status_code == 404
     
-def test_listing_jobs_of_project_without_jobs_returns_empty_list(client, db):
+def test_listing_jobs_of_project_without_jobs_returns_empty_list(client, db, user):
     project = create_project(db, ProjectCreate(
         title="Empty",
         author="University of Aveiro",
@@ -125,10 +133,28 @@ def test_listing_jobs_of_project_without_jobs_returns_empty_list(client, db):
         copyright_notice="CC BY 4.0",
         licence_confirmed=True,
         authorship_confirmed=True,
-    ))
+    ), user)
     response = client.get(f"/projects/{project.id}/jobs")
     assert response.status_code == 200
     assert response.json() == []
     
 def test_listing_jobs_with_invalid_project_id_is_rejected(client):
     assert client.get("/projects/not-a-uuid/jobs").status_code == 422
+
+def test_jobs_need_a_signed_in_user(anonymous, db, user):
+    job = queued_job(db, user)
+
+    assert anonymous.get(f"/projects/{job.project_id}/jobs").status_code == 401
+    assert anonymous.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel").status_code == 401
+    db.expire_all()
+    assert db.get(Job, job.id).status == JobStatusEnum.QUEUED
+
+
+def test_jobs_of_a_project_the_user_does_not_own_are_not_found(client, db):
+    job = queued_job(db)  # no owner: not the signed-in user's project
+
+    assert client.get(f"/projects/{job.project_id}/jobs").status_code == 404
+    assert client.get(f"/projects/{job.project_id}/jobs/{job.id}").status_code == 404
+    assert client.post(f"/projects/{job.project_id}/jobs/{job.id}/cancel").status_code == 404
+    db.expire_all()
+    assert db.get(Job, job.id).status == JobStatusEnum.QUEUED

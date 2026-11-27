@@ -16,6 +16,7 @@ from app.core.config import (
     LANGUAGE_CODE_PATTERN,
     PROGRESS_MAX,
     PROGRESS_MIN,
+    VIDEO_START_SECONDS,
     get_settings,
 )
 from app.schemas.enums import (
@@ -94,6 +95,8 @@ class JobRequestMessage(BaseModel):
     storage_upload_id: str | None = None
     staged_file: str | None = None
     file_name: str | None = None
+    audio_key: str | None = None
+    time_offset_seconds: float = Field(default=VIDEO_START_SECONDS, ge=VIDEO_START_SECONDS)
     requested_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -142,7 +145,7 @@ class JobStatusResponseSchema(BaseModel):
     @computed_field
     @property
     def message(self) -> str | None:
-        """The progress text of the current step (FR02 outputs)."""
+        """The progress text of the current step (FR02 and FR04 outputs)."""
         if self.step is None:
             return None
         return JOB_STEP_MESSAGES.get(self.job_type, {}).get(self.step)

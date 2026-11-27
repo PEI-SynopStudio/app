@@ -2,7 +2,7 @@ import logging
 import uuid
 from dataclasses import fields
 from datetime import timedelta
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -12,12 +12,15 @@ from app.core.config import (
     AUDIT_DETAIL_JOB_ID,
     AUDIT_DETAIL_SOURCE,
     ERROR_INGESTION_ALREADY_RUNNING,
+    ERROR_INGESTION_DURING_TRANSCRIPTION,
+    ERROR_TRANSCRIPTION_ALREADY_RUNNING,
     ERROR_INVALID_JOB_ID,
     ERROR_JOB_QUEUED_STALLED,
     ERROR_JOB_STALLED,
     ERROR_JOB_DISPATCH_FAILED,
     JOB_ACTIVE_INGESTION_INDEX,
     JOB_ACTIVE_STATUSES,
+    JOB_ACTIVE_TRANSCRIPTION_INDEX,
     JSON_DUMP_MODE,
     LOG_JOB_EVENT_REJECTED,
     LOG_JOB_DISPATCH_FAILED,
@@ -31,18 +34,30 @@ from app.core.config import (
 )
 from app.core.exceptions import JobNotFoundError
 from app.database.base import utc_now
-from app.database.models import Job
-from app.schemas.job import IngestionParams, JobStatusResponseSchema, JobUpdateEventSchema, JobRequestMessage
+from app.database.models import Job, User
+from app.schemas.job import (
+    IngestionParams,
+    JobRequestMessage,
+    JobStatusResponseSchema,
+    JobUpdateEventSchema,
+    TranscriptionParams,
+)
 from app.services.audit.audit import record_audit
 from app.services.projects.projects import require_ingestion_allowed
+from app.services.storage.object_storage import ObjectStorage
 from app.services.workflow.dispatcher import JobDispatcher
 from app.services.workflow.ingestion_results import record_ingestion_outcome
+from app.services.workflow.transcription_results import record_transcription_outcome
 from app.services.workflow.state_machine import ApplyResult, JobSnapshot, apply_event, change_status
 
 logger = logging.getLogger(__name__)
 
 
 class IngestionAlreadyRunningError(Exception):
+    pass
+
+
+class TranscriptionAlreadyRunningError(Exception):
     pass
 
 
@@ -54,9 +69,14 @@ def create_ingestion_job(
     params: IngestionParams,
     source: str,
     media_asset_id: Optional[uuid.UUID] = None,
+    actor: Optional[User] = None,
 ) -> Job:
-    """Raises IngestionAlreadyRunningError when the project already has an active ingestion."""
+    """Raises IngestionAlreadyRunningError when the project already has an active ingestion.
+
+    Raises TranscriptionAlreadyRunningError while the current video is being transcribed: its worker still reads the audio.
+    """
     project = require_ingestion_allowed(db, project_id)
+    _require_no_active_transcription(db, project.id)
     job = Job(
         project_id=project.id,
         media_asset_id=media_asset_id,
@@ -78,6 +98,38 @@ def create_ingestion_job(
         project.id,
         AuditAction.INGESTION_REQUESTED,
         {AUDIT_DETAIL_JOB_ID: str(job.id), AUDIT_DETAIL_SOURCE: source},
+        actor=actor,
+    )
+    db.commit()
+    return job
+
+
+def create_transcription_job(
+    db: Session,
+    project_id: str,
+    params: TranscriptionParams,
+    media_asset_id: uuid.UUID,
+    actor: Optional[User] = None,
+) -> Job:
+    project = require_ingestion_allowed(db, project_id)
+    job = Job(
+        project_id=project.id,
+        media_asset_id=media_asset_id,
+        job_type=JobTypeEnum.TRANSCRIPTION,
+        parameters=params.model_dump(mode=JSON_DUMP_MODE),
+    )
+    db.add(job)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if exc.orig.diag.constraint_name == JOB_ACTIVE_TRANSCRIPTION_INDEX:
+            raise TranscriptionAlreadyRunningError(
+                ERROR_TRANSCRIPTION_ALREADY_RUNNING.format(project_id=project_id)
+            ) from exc
+        raise
+    record_audit(
+        db, project.id, AuditAction.TRANSCRIPTION_REQUESTED, {AUDIT_DETAIL_JOB_ID: str(job.id)}, actor=actor
     )
     db.commit()
     return job
@@ -118,6 +170,15 @@ def latest_ingestion_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
     return db.scalars(query).first()
 
 
+def latest_transcription_job(db: Session, project_id: uuid.UUID) -> Optional[Job]:
+    query = (
+        select(Job)
+        .where(Job.project_id == project_id, Job.job_type == JobTypeEnum.TRANSCRIPTION)
+        .order_by(Job.created_at.desc())
+    )
+    return db.scalars(query).first()
+
+
 def queue_job(db: Session, job: Job) -> Job:
     """Committed before publishing, so a worker event never arrives while the job is still pending."""
     return _change_status(db, job, JobStatusEnum.QUEUED)
@@ -150,8 +211,13 @@ def cancel_job(db: Session, project_id: str, job_id: str) -> Job:
 
 # Apply a worker event to the stored job, one event at a time per job.
 # Source: architecture §2 (workers publish results, the backend persists them); T3.13 job state machine.
-def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
-    """The row lock makes concurrent events of the same job wait for each other."""
+def apply_job_event(
+    db: Session, event: JobUpdateEventSchema, open_object_storage: Optional[Callable[[], ObjectStorage]] = None
+) -> ApplyResult:
+    """The row lock makes concurrent events of the same job wait for each other.
+
+    open_object_storage is required for the events of transcription jobs, whose transcript is read from storage.
+    """
     job = db.get(Job, event.job_id, with_for_update=True)
     if job is None:
         raise JobNotFoundError()
@@ -160,6 +226,7 @@ def apply_job_event(db: Session, event: JobUpdateEventSchema) -> ApplyResult:
     if result.outcome == ApplyOutcome.APPLIED:
         _store(job, result.job)
         record_ingestion_outcome(db, job)
+        record_transcription_outcome(db, job, open_object_storage)
     elif result.outcome == ApplyOutcome.REJECTED:
         logger.warning(LOG_JOB_EVENT_REJECTED, event.job_id, result.reason)
     db.commit()
@@ -182,6 +249,17 @@ def sweep_stalled_jobs(db: Session) -> List[JobStatusResponseSchema]:
     return failed
 
 
+def _require_no_active_transcription(db: Session, project_id: uuid.UUID) -> None:
+    active = select(Job.id).where(
+        Job.project_id == project_id,
+        Job.job_type == JobTypeEnum.TRANSCRIPTION,
+        Job.status.in_(JOB_ACTIVE_STATUSES),
+    )
+    if db.scalar(active.limit(1)) is not None:
+        db.rollback()
+        raise TranscriptionAlreadyRunningError(ERROR_INGESTION_DURING_TRANSCRIPTION.format(project_id=project_id))
+
+
 def _has_stalled(job: Job) -> bool:
     settings = get_settings()
     if job.status != JobStatusEnum.PROCESSING:
@@ -202,6 +280,7 @@ def _change_status(
 ) -> Job:
     _store(job, change_status(_snapshot(job), target, utc_now(), error_code, error_message))
     record_ingestion_outcome(db, job)
+    record_transcription_outcome(db, job)
     db.commit()
     return job
 

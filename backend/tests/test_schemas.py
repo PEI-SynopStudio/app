@@ -206,8 +206,8 @@ def test_message_ingestion_step():
 
 
 def test_message_transcription_step():
-    response = _response(job_type=JobTypeEnum.TRANSCRIPTION, step=JobStepProcessingEnum.DIARIZING)
-    assert response.message == "Identifying the speakers"
+    response = _response(job_type=JobTypeEnum.TRANSCRIPTION, step=JobStepProcessingEnum.TRANSCRIBING)
+    assert response.message == "Transcribing the speech"
 
 
 def test_message_depends_on_job_type():

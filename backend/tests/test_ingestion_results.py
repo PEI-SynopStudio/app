@@ -18,7 +18,8 @@ from app.database.models import AudioTrack, AuditLog, Job, MediaAsset, Project
 from app.schemas.job import IngestionParams, JobUpdateEventSchema
 from app.schemas.project import ProjectCreate
 from app.services.projects.projects import create_project
-from app.services.workflow.jobs import apply_job_event, create_ingestion_job, fail_job, queue_job, cancel_job
+from app.services.workflow.ingestion_results import record_ingestion_outcome
+from app.services.workflow.jobs import apply_job_event, cancel_job, create_ingestion_job, fail_job, queue_job
 
 SAMPLE_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0"
 OUTPUT = {
@@ -188,18 +189,14 @@ def test_other_job_types_do_not_change_the_project(db):
         id=uuid.uuid4(),
         project_id=project.id,
         job_type=JobTypeEnum.TRANSCRIPTION,
-        status=JobStatusEnum.QUEUED,
+        status=JobStatusEnum.PROCESSING,
         parameters={},
     )
     db.add(transcription)
     db.commit()
 
-    apply_job_event(db, JobUpdateEventSchema(
-        job_id=transcription.id,
-        status=JobStatusEnum.PROCESSING,
-        step=JobStepProcessingEnum.TRANSCRIBING,
-        step_progress=0,
-    ))
+    record_ingestion_outcome(db, transcription)
+    db.commit()
 
     db.expire_all()
     assert db.get(Project, project.id).status == ProjectStatus.DRAFT

@@ -61,8 +61,46 @@ def insert_entry(engine, age=timedelta()):
     return entry_id
 
 
+INSERT_USER_AT_0007 = text(
+    "INSERT INTO users (id, subject, email, name, password_hash, age_group, is_active, is_admin, failed_login_count, "
+    "created_at, updated_at) VALUES (:id, :subject, :email, 'Ana', :password_hash, 'adult', true, false, 0, :now, :now)"
+)
+INSERT_SESSION_AT_0007 = text(
+    "INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at, authenticated_at) "
+    "VALUES (:id, :user_id, :token_hash, :now, :now, :authenticated_at)"
+)
+
+
 def test_migrations_match_the_models(alembic_config):
     command.check(alembic_config)
+
+
+def test_accounts_and_sessions_from_before_keycloak_are_removed(alembic_config, engine):
+    command.downgrade(alembic_config, "0007")
+    old_account, keycloak_account = str(uuid.uuid4()), str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(INSERT_USER_AT_0007, {
+            "id": old_account, "subject": None, "email": "old@example.com", "password_hash": "$argon2id$", "now": utc_now()
+        })
+        connection.execute(INSERT_USER_AT_0007, {
+            "id": keycloak_account, "subject": "subject-1", "email": "ana@example.com", "password_hash": None,
+            "now": utc_now(),
+        })
+        for user_id, token_hash, authenticated_at in [
+            (old_account, "a" * 64, utc_now()),
+            (keycloak_account, "b" * 64, None),
+            (keycloak_account, "c" * 64, utc_now()),
+        ]:
+            connection.execute(INSERT_SESSION_AT_0007, {
+                "id": str(uuid.uuid4()), "user_id": user_id, "token_hash": token_hash, "now": utc_now(),
+                "authenticated_at": authenticated_at,
+            })
+
+    command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        assert connection.scalars(text("SELECT email FROM users")).all() == ["ana@example.com"]
+        assert connection.scalars(text("SELECT token_hash FROM auth_sessions")).all() == ["c" * 64]
 
 
 def test_uploads_in_progress_are_discarded_when_the_chunks_move_to_object_storage(alembic_config, engine):
@@ -94,6 +132,34 @@ def test_existing_projects_get_the_default_settings(alembic_config, engine):
     query = text("SELECT description, aspect_ratio, language, caption_style FROM projects WHERE id = :id")
     with engine.connect() as connection:
         assert tuple(connection.execute(query, {"id": project_id}).one()) == (None, "9:16", "pt-PT", "classic")
+
+INSERT_USER_AT_0010 = text(
+    "INSERT INTO users (id, subject, email, name, age_group, is_admin, created_at, updated_at) "
+    "VALUES (:id, 'subject-1', 'ana@example.com', 'Ana', 'adult', false, :now, :now)"
+)
+INSERT_PROJECT_AT_0010 = text(
+    "INSERT INTO projects (id, owner_id, title, author, speakers, recording_date, license_type, copyright_notice, "
+    "licence_confirmed, authorship_confirmed, status, aspect_ratio, language, caption_style, created_at, updated_at) "
+    "VALUES (:id, :owner_id, 'Debate', 'University of Aveiro', '[\"Ana\"]', '2026-10-01', 'creative_commons', "
+    "'CC BY 4.0', true, true, 'draft', '9:16', 'pt-PT', 'classic', :now, :now)"
+)
+
+
+def test_projects_keep_an_existing_owner_and_lose_one_whose_account_is_gone(alembic_config, engine):
+    command.downgrade(alembic_config, "0010")
+    owner, kept, orphan, now = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), utc_now()
+    with engine.begin() as connection:
+        connection.execute(INSERT_USER_AT_0010, {"id": owner, "now": now})
+        connection.execute(INSERT_PROJECT_AT_0010, {"id": kept, "owner_id": owner, "now": now})
+        # Like the projects of an account from before Keycloak, removed by 0008.
+        connection.execute(INSERT_PROJECT_AT_0010, {"id": orphan, "owner_id": str(uuid.uuid4()), "now": now})
+
+    command.upgrade(alembic_config, "head")
+
+    owner_of = text("SELECT owner_id::text FROM projects WHERE id = :id")
+    with engine.connect() as connection:
+        assert connection.scalar(owner_of, {"id": kept}) == owner
+        assert connection.scalar(owner_of, {"id": orphan}) is None
 
 
 def test_the_database_refuses_to_change_an_audit_entry(engine):
