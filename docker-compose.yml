@@ -59,11 +59,12 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://pei:pei@rabbitmq:5672/}
       S3_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-pei}
       S3_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-pei}
-      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:8333}
+      # Signed media links point at SeaweedFS through Traefik; an HTTPS page can't play video from plain HTTP.
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-https://media.localhost}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       # The browser only reaches the app over HTTPS through Traefik.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
-      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-https://auth.localhost}
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://localhost}
       API_PUBLIC_PATH: ${API_PUBLIC_PATH:-/api}
@@ -176,6 +177,12 @@ services:
     volumes:
       - seaweedfs_data:/data
     command: server -ip=seaweedfs -ip.bind=0.0.0.0 -filer -filer.encryptVolumeData -s3 -s3.encryptVolumeData
+    labels:
+      - traefik.enable=true
+      # Browsers only read signed links (video, waveform), so other S3 methods stay inside the Docker network.
+      - traefik.http.routers.media.rule=Host(`${MEDIA_HOST:-media.localhost}`) && (Method(`GET`) || Method(`HEAD`))
+      - traefik.http.routers.media.entrypoints=websecure
+      - traefik.http.services.media.loadbalancer.server.port=8333
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8333/healthz"]
       interval: 5s
@@ -195,11 +202,23 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: ${POSTGRES_USER:-pei}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-pei}
-      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-https://auth.localhost}
+      # The admin console keeps its own address: Traefik doesn't route /admin.
+      KC_HOSTNAME_ADMIN: ${KEYCLOAK_ADMIN_URL:-http://localhost:8080}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      # Behind Traefik: read X-Forwarded-* (HTTPS, client IP) only from Traefik's address.
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: ${TRAEFIK_IP:-172.30.0.10}
       KC_HEALTH_ENABLED: "true"
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-pei-dev-client-secret}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://localhost}
+    labels:
+      - traefik.enable=true
+      # Only the paths browsers need (sign-in, sign-up, account page and their files), as Keycloak's reverse proxy
+      # guide recommends; the admin console and admin API stay off the public entry point.
+      - traefik.http.routers.auth.rule=Host(`${AUTH_HOST:-auth.localhost}`) && (PathPrefix(`/realms/`) || PathPrefix(`/resources/`))
+      - traefik.http.routers.auth.entrypoints=websecure
+      - traefik.http.services.auth.loadbalancer.server.port=8080
     volumes:
       - ./keycloak/import:/opt/keycloak/data/import:ro
     healthcheck:
