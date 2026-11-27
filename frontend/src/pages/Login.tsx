@@ -1,25 +1,15 @@
-import { useRef, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
-import { Field } from "../components/Field";
+import { createSearchParams, Link, useSearchParams } from "react-router";
 import { AuthLayout } from "../layouts/AuthLayout";
-import { shake, useGSAP } from "../lib/gsap";
-import { clearCustomValidity, validateForm } from "../lib/validation";
+import { loginErrorMessage, SESSION_EXPIRED_MESSAGE, signIn } from "../lib/auth";
+import { isExpiredLogin, PATHS, QUERY, safeNextPath } from "../lib/paths";
 
+// Hand the sign-in to Keycloak; the backend brings the browser back to next, or here with ?error=<code>.
+// Source: backend GET /auth/login and /auth/callback; MS3 §1.1.6.
 export function Login() {
-  const navigate = useNavigate();
-  const formRef = useRef<HTMLFormElement>(null);
-  const { contextSafe } = useGSAP({ scope: formRef });
-
-  const handleSubmit = contextSafe((event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!validateForm(form)) {
-      shake(form);
-      return;
-    }
-    // TODO(auth): connect to the API once the login spec exists.
-    navigate("/app");
-  });
+  const [params] = useSearchParams();
+  const next = safeNextPath(params.get(QUERY.next));
+  const error = loginErrorMessage(params.get(QUERY.error));
+  const expired = !error && isExpiredLogin(params);
 
   return (
     <AuthLayout
@@ -27,24 +17,29 @@ export function Login() {
       subtitle="Log in to your account to continue."
       footer={
         <>
-          Don't have an account yet? <Link to="/signup">Create account</Link>
+          Don't have an account yet?{" "}
+          <Link to={{ pathname: PATHS.signup, search: `?${createSearchParams({ [QUERY.next]: next })}` }}>
+            Create account
+          </Link>
         </>
       }
     >
-      <form ref={formRef} className="auth__form" noValidate onSubmit={handleSubmit} onInput={clearCustomValidity}>
-        <Field
-          label="Email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          placeholder="name@example.com"
-          required
-        />
-        <Field label="Password" name="password" type="password" autoComplete="current-password" required />
-        <button type="submit" className="btn btn--primary btn--lg btn--block">
-          Log in
+      <div className="auth__form">
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        {expired && (
+          <p className="form-error" role="status">
+            {SESSION_EXPIRED_MESSAGE}
+          </p>
+        )}
+        <button type="button" className="btn btn--primary btn--lg btn--block" onClick={() => signIn(next)}>
+          Continue to log in
         </button>
-      </form>
+        <p className="auth__note">You'll enter your email and password on the SynopStudio sign-in page.</p>
+      </div>
     </AuthLayout>
   );
 }

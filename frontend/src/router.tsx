@@ -1,4 +1,6 @@
 import { createBrowserRouter } from "react-router";
+import { AUTH_ROUTE_ID, redirectIfSignedIn, requireUser } from "./auth/loaders";
+import { SessionError, SessionPending } from "./auth/SessionStatus";
 import { AppLayout } from "./layouts/AppLayout";
 import { RootLayout } from "./layouts/RootLayout";
 import { ClipEditor } from "./pages/app/ClipEditor";
@@ -22,24 +24,41 @@ export const router = createBrowserRouter([
     element: <RootLayout />,
     children: [
       { index: true, element: <Landing /> },
-      { path: "login", element: <Login /> },
-      { path: "signup", element: <Signup /> },
       { path: "terms", element: <Terms /> },
       { path: "privacy", element: <Privacy /> },
+      // Public: a Viewer has no account.
       { path: "view/:shareId", element: <Viewer /> },
       {
-        path: "app",
-        element: <AppLayout />,
+        // Guest-only: a signed-in user goes on to the app.
+        loader: redirectIfSignedIn,
+        HydrateFallback: SessionPending,
         children: [
-          { index: true, element: <Projects /> },
-          { path: "new", element: <NewProject /> },
-          { path: "summarize", element: <Summarize /> },
-          { path: "projects/:projectId", element: <ProjectDetail /> },
-          { path: "projects/:projectId/clips/:clipId", element: <ClipDetail /> },
-          { path: "settings", element: <Settings /> },
+          { path: "login", element: <Login /> },
+          { path: "signup", element: <Signup /> },
         ],
       },
-      { path: "app/projects/:projectId/clips/:clipId/edit", element: <ClipEditor /> },
+      {
+        // Signed-in only; the clip editor is full-screen, outside AppLayout, but guarded the same way.
+        id: AUTH_ROUTE_ID,
+        loader: requireUser,
+        HydrateFallback: SessionPending,
+        errorElement: <SessionError />,
+        children: [
+          {
+            path: "app",
+            element: <AppLayout />,
+            children: [
+              { index: true, element: <Projects /> },
+              { path: "new", element: <NewProject /> },
+              { path: "summarize", element: <Summarize /> },
+              { path: "projects/:projectId", element: <ProjectDetail /> },
+              { path: "projects/:projectId/clips/:clipId", element: <ClipDetail /> },
+              { path: "settings", element: <Settings /> },
+            ],
+          },
+          { path: "app/projects/:projectId/clips/:clipId/edit", element: <ClipEditor /> },
+        ],
+      },
       { path: "*", element: <NotFound /> },
     ],
   },
