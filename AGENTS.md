@@ -64,12 +64,14 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/app/auth`, `backend/app/services/users` — empty packages reserved for auth and users.
 - `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests. `fake_llm_provider.py` replies with scripted LLM answers, so no test needs a model or network; `data/clips/short_transcript.json` is a synthetic transcript for the clip generation tests. `data/llm/prompts/` holds the prompt files of the LLM layer tests.
 - `frontend/` — React 19 + TypeScript + Vite; still the stock template.
-- Configuration: `docker-compose.yml`, `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
+- `traefik/` — reverse proxy (T4.36): `dynamic/tls.yml` (TLS options and certificate), `generate-dev-cert.sh` (self-signed certificate in `traefik/certs/`, kept out of git).
+- Configuration: `docker-compose.yml`, `docker-compose.override.yml` (development only: host ports on 127.0.0.1), `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
 - Durable media lives in SeaweedFS (`S3_BUCKET`, the `seaweedfs_data` Docker volume), encrypted at rest. `/data/media` (`MEDIA_ROOT`, the `media_data` Docker volume) only holds the files of a running job.
 
 ## Commands
 
-Stack (frontend :5173, backend :8000, Postgres :5432, RabbitMQ AMQP :5672 and management UI :15672, SeaweedFS S3 API :8333, plus the `ingestion-worker` service):
+Stack: Traefik is the entry point (https://localhost for the frontend, https://localhost/api for the backend, https://media.localhost for signed media links, https://auth.localhost for Keycloak; README "Endereços"). In development `docker-compose.override.yml` also publishes on 127.0.0.1: frontend :5173, backend :8000, Postgres :5432, RabbitMQ AMQP :5672 and management UI :15672, SeaweedFS S3 API :8333, Keycloak admin :8080; plus the `ingestion-worker` service:
+- `sh traefik/generate-dev-cert.sh` — once, before the first start: the self-signed certificate for HTTPS.
 - `docker compose up --build` — start everything; backend and frontend hot-reload via bind mounts.
 - `docker compose down -v` — stop and delete volumes (DB, RabbitMQ, media).
 
