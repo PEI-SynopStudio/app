@@ -7,11 +7,9 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.database.base import utc_now
-from test_models import make_asset, make_project
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 INSERT_ENTRY = text(
@@ -42,6 +40,17 @@ def engine(alembic_config, database_url):
 INSERT_UPLOAD_AT_0003 = text(
     "INSERT INTO upload_sessions (id, project_id, media_asset_id, file_name, size_bytes, chunk_size, total_chunks, "
     "staged_file, expires_at, created_at) VALUES (:id, :project_id, :asset_id, 'a.mp4', 10, 4, 3, 'a.mp4', :now, :now)"
+)
+
+# Plain SQL for the older revisions: the models describe the latest schema, with columns these revisions lack.
+INSERT_PROJECT_BEFORE_0005 = text(
+    "INSERT INTO projects (id, title, author, speakers, recording_date, license_type, copyright_notice, "
+    "licence_confirmed, authorship_confirmed, status, created_at, updated_at) VALUES (:id, 'Debate', "
+    "'University of Aveiro', '[\"Ana\"]', '2026-10-01', 'creative_commons', 'CC BY 4.0', true, true, 'draft', :now, :now)"
+)
+INSERT_ASSET_BEFORE_0005 = text(
+    "INSERT INTO media_assets (id, project_id, source_type, file_name, status, created_at, updated_at) "
+    "VALUES (:id, :project_id, 'upload', 'debate.mp4', 'processing', :now, :now)"
 )
 
 
@@ -96,15 +105,13 @@ def test_accounts_and_sessions_from_before_keycloak_are_removed(alembic_config, 
 
 def test_uploads_in_progress_are_discarded_when_the_chunks_move_to_object_storage(alembic_config, engine):
     command.downgrade(alembic_config, "0003")
-    with Session(engine) as db:
-        project = make_project()
-        asset = make_asset(project)
-        db.add_all([project, asset])
-        db.commit()
-        db.execute(INSERT_UPLOAD_AT_0003, {
-            "id": str(uuid.uuid4()), "project_id": str(project.id), "asset_id": str(asset.id), "now": utc_now()
-        })
-        db.commit()
+    project_id, asset_id, now = str(uuid.uuid4()), str(uuid.uuid4()), utc_now()
+    with engine.begin() as connection:
+        connection.execute(INSERT_PROJECT_BEFORE_0005, {"id": project_id, "now": now})
+        connection.execute(INSERT_ASSET_BEFORE_0005, {"id": asset_id, "project_id": project_id, "now": now})
+        connection.execute(
+            INSERT_UPLOAD_AT_0003, {"id": str(uuid.uuid4()), "project_id": project_id, "asset_id": asset_id, "now": now}
+        )
 
     command.upgrade(alembic_config, "head")
 
@@ -112,6 +119,47 @@ def test_uploads_in_progress_are_discarded_when_the_chunks_move_to_object_storag
         assert connection.scalar(text("SELECT count(*) FROM upload_sessions")) == 0
         assert connection.scalar(text("SELECT count(*) FROM media_assets")) == 0
         assert connection.scalar(text("SELECT count(*) FROM projects")) == 1
+
+
+def test_existing_projects_get_the_default_settings(alembic_config, engine):
+    command.downgrade(alembic_config, "0004")
+    project_id = str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(INSERT_PROJECT_BEFORE_0005, {"id": project_id, "now": utc_now()})
+
+    command.upgrade(alembic_config, "head")
+
+    query = text("SELECT description, aspect_ratio, language, caption_style FROM projects WHERE id = :id")
+    with engine.connect() as connection:
+        assert tuple(connection.execute(query, {"id": project_id}).one()) == (None, "9:16", "pt-PT", "classic")
+
+INSERT_USER_AT_0010 = text(
+    "INSERT INTO users (id, subject, email, name, age_group, is_admin, created_at, updated_at) "
+    "VALUES (:id, 'subject-1', 'ana@example.com', 'Ana', 'adult', false, :now, :now)"
+)
+INSERT_PROJECT_AT_0010 = text(
+    "INSERT INTO projects (id, owner_id, title, author, speakers, recording_date, license_type, copyright_notice, "
+    "licence_confirmed, authorship_confirmed, status, aspect_ratio, language, caption_style, created_at, updated_at) "
+    "VALUES (:id, :owner_id, 'Debate', 'University of Aveiro', '[\"Ana\"]', '2026-10-01', 'creative_commons', "
+    "'CC BY 4.0', true, true, 'draft', '9:16', 'pt-PT', 'classic', :now, :now)"
+)
+
+
+def test_projects_keep_an_existing_owner_and_lose_one_whose_account_is_gone(alembic_config, engine):
+    command.downgrade(alembic_config, "0010")
+    owner, kept, orphan, now = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), utc_now()
+    with engine.begin() as connection:
+        connection.execute(INSERT_USER_AT_0010, {"id": owner, "now": now})
+        connection.execute(INSERT_PROJECT_AT_0010, {"id": kept, "owner_id": owner, "now": now})
+        # Like the projects of an account from before Keycloak, removed by 0008.
+        connection.execute(INSERT_PROJECT_AT_0010, {"id": orphan, "owner_id": str(uuid.uuid4()), "now": now})
+
+    command.upgrade(alembic_config, "head")
+
+    owner_of = text("SELECT owner_id::text FROM projects WHERE id = :id")
+    with engine.connect() as connection:
+        assert connection.scalar(owner_of, {"id": kept}) == owner
+        assert connection.scalar(owner_of, {"id": orphan}) is None
 
 
 def test_the_database_refuses_to_change_an_audit_entry(engine):

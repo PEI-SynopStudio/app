@@ -31,7 +31,7 @@ TONE_AMPLITUDE = 0.5
 # array typecode, full-scale value and converter for the sample formats the test encoders ask for
 # (a trailing "p" in the format name only means planar).
 SAMPLE_TYPES = {"flt": ("f", 1.0, float), "s16": ("h", 32767, int), "s32": ("i", 2**31 - 1, int)}
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5432/pei_test")
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5433/pei_test")
 
 
 def _tone_plane(first_sample: int, samples: int, interleaved_channels: int, format_name: str) -> bytes:

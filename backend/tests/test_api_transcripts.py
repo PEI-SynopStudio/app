@@ -25,7 +25,7 @@ class UnreachableBroker(JobDispatcher):
 
 def own(db, project_id, user):
     """Give the project to the signed-in test user, so the API lets the client reach it."""
-    db.get(Project, uuid.UUID(project_id)).owner_id = str(user.id)
+    db.get(Project, uuid.UUID(project_id)).owner_id = user.id
     db.commit()
     return project_id
 

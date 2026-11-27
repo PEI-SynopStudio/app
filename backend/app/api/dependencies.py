@@ -41,7 +41,7 @@ def get_current_user(current: CurrentSession = Depends(get_current_session)) -> 
 
 
 def owns(user: User, project: Project) -> bool:
-    return project.owner_id == str(user.id)
+    return project.owner_id == user.id
 
 
 def require_project_access(
