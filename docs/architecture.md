@@ -19,10 +19,13 @@ Core architectural principles (from the requirements):
 
 ```
 Browser (React)
-   │  HTTP
-Reverse proxy (Traefik) ──login──► Identity provider (Keycloak)
-   │  REST                              ▲ token validation
-Backend (FastAPI) ──────────────────────┘
+   │  HTTPS (TLS 1.2+, 1.3 preferred; HTTP :80 redirects)
+Reverse proxy (Traefik) ──auth.<host>──► Identity provider (Keycloak)
+   │  <host>/        → Frontend                 ▲ token validation (internal URL)
+   │  <host>/api     → Backend                  │
+   │  media.<host>   → Object storage (signed links, read-only)
+   │  REST · WebSocket                          │
+Backend (FastAPI) ──────────────────────────────┘
    │  ├─ REST routers (API)
    │  ├─ WebSockets (progress events to the UI)
    │  └─ Business logic: Projects · Media and Upload · Transcripts · Segments · Clips · Editing
@@ -46,7 +49,7 @@ External APIs ──events and data──► Backend
 | Component | Technology | Responsibility |
 | --- | --- | --- |
 | Frontend | React | Web interface: projects, transcript editor, timeline, clip review, export |
-| Reverse proxy | Traefik | Entry point; routes HTTP requests to the backend and login to the identity provider |
+| Reverse proxy | Traefik | Single entry point over HTTPS: frontend, API and WebSocket on one origin, signed media links and the identity provider's sign-in pages on their own hosts (§2.1) |
 | Identity provider | Keycloak | Login and user accounts; the backend validates its tokens |
 | Backend | FastAPI (Python) | REST API, WebSocket notifications, business logic, publishing jobs and consuming results |
 | Message broker | RabbitMQ (AMQP) | Job queue between backend and workers; workers publish results back |
@@ -54,6 +57,31 @@ External APIs ──events and data──► Backend
 | Relational database | PostgreSQL | Projects, metadata, transcripts, segments, clips, audit records |
 | Object storage | SeaweedFS (S3 API) | Raw media, normalized audio, proxy videos, keyframes, rendered clips |
 | External APIs | — | Email notifications, external video sources, external AI models |
+
+### 2.1 Entry point (Traefik)
+
+Traefik (`traefik:v3.7.20`, T4.36) is the only service published outside development. Routes come from Docker labels
+in `docker-compose.yml`; TLS settings from `traefik/dynamic/tls.yml`. The dashboard is off.
+
+| Browser address | Goes to | Notes |
+| --- | --- | --- |
+| `https://<APP_HOST>/` | Frontend (Vite dev server) | Hot reload through 443 (`HMR_CLIENT_PORT`) |
+| `https://<APP_HOST>/api/...` | Backend | `/api` stripped by Traefik; uvicorn's `UVICORN_ROOT_PATH=/api` keeps `/api/docs` working; includes the progress WebSocket |
+| `https://<MEDIA_HOST>/...` | SeaweedFS S3 API | GET and HEAD only: the browser reads signed links (`S3_PUBLIC_ENDPOINT_URL`); writes stay inside the Docker network |
+| `https://<AUTH_HOST>/realms/`, `/resources/` | Keycloak | Sign-in, sign-up and account pages; the admin console stays on `127.0.0.1:8080` |
+
+- **TLS:** minimum TLS 1.2 with ECDHE-AEAD suites; TLS 1.3 is negotiated whenever the browser supports it. Port 80 only
+  redirects to HTTPS. Local development and the project VM use a self-signed certificate (`traefik/generate-dev-cert.sh`,
+  kept out of git); Let's Encrypt replaces it once the VM has a domain (README).
+- **One origin:** the frontend and the API share `https://<APP_HOST>`, so the session cookie (`Secure`, `HttpOnly`,
+  `SameSite=Lax`) needs no CORS.
+- **Forwarded headers:** Traefik has a fixed address on the `synopstudio` network (`TRAEFIK_IP`). uvicorn
+  (`FORWARDED_ALLOW_IPS`) and Keycloak (`KC_PROXY_TRUSTED_ADDRESSES`) trust `X-Forwarded-*` from that address only, so
+  sessions and sign-in events store the client's IP; Traefik drops forwarded headers that clients send.
+- **Limits:** Traefik's read timeout is raised to 600 s (`TRAEFIK_READ_TIMEOUT`) so 8 MB upload chunks on slow links
+  are not cut; Traefik sets no body size limit.
+- **Development vs. VM:** `docker-compose.override.yml`, loaded automatically in development, also publishes each
+  service's port on `127.0.0.1`. The VM runs `docker compose -f docker-compose.yml`, which publishes only 80 and 443.
 
 ### Backend business-logic modules
 
@@ -107,7 +135,7 @@ Libraries come from the MS3 licence audit. Which worker uses each library is inf
 | --- | --- | --- |
 | Performance | UI actions < 200 ms; job submission < 5 s; 1 h recording → publishable clips in ≤ 15 min; videos up to 4 h | NFR Performance |
 | Accuracy | Word timestamps and clip traceability ±100 ms; diarization ≥ 90% for up to 6 speakers | NFR Accuracy |
-| Security | TLS 1.3 in transit; AES-256 at rest; licence confirmation on 100% of projects | NFR Security |
+| Security | TLS 1.3 in transit (Traefik: TLS 1.2 minimum, 1.3 preferred); AES-256 at rest; licence confirmation on 100% of projects | NFR Security |
 | Audit | Audit logs kept ≥ 12 months; rationale and source references for 100% of AI decisions | NFR Security; MS3 §1.4.3 |
 | Data deletion | Deleting a project or account removes videos, documents, transcripts and clips; only billing and licence/editorial audit records remain (12 months) | MS3 §1.4.3 |
 | AI transparency | AI-generated text labelled and marked in a machine-readable way (C2PA under evaluation) | MS3 §1.3.1, §1.3.4 |
@@ -121,3 +149,6 @@ Libraries come from the MS3 licence audit. Which worker uses each library is inf
 - Signed media links (MS3 §1.1.6) have no owner check until the identity provider is in place.
 - Model and library used by the Highlight Scoring worker.
 - The domain model has no explicit `Clip`, `AuditLog`, `Approval` or `ShareLink` entity; clips appear to be represented by `MediaAsset` (relevance/highlight scores, render status).
+- A domain for the project VM, so Traefik can use a Let's Encrypt certificate instead of the self-signed one.
+- The VM still runs the development servers (Vite, `uvicorn --reload`, bind mounts); a production build is not defined yet.
+- CORS on `media.<host>` if the frontend reads media with `fetch()` (the waveform); `<video>` needs none.

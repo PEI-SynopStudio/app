@@ -19,6 +19,10 @@ backend_root = Path(__file__).resolve().parent.parent
 if str(backend_root) not in sys.path:
     sys.path.insert(0, str(backend_root))
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "llm: needs a real LLM server; runs only when TEST_LLM_PROFILE is set")
+
 SAMPLE_FPS = 25
 SAMPLE_RATE = 48000
 SAMPLE_LAYOUT = "stereo"
@@ -27,7 +31,12 @@ TONE_AMPLITUDE = 0.5
 # array typecode, full-scale value and converter for the sample formats the test encoders ask for
 # (a trailing "p" in the format name only means planar).
 SAMPLE_TYPES = {"flt": ("f", 1.0, float), "s16": ("h", 32767, int), "s32": ("i", 2**31 - 1, int)}
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5432/pei_test")
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5433/pei_test")
+
+# Tests also run inside the backend container, which carries the deployment's HTTPS settings. The test client speaks
+# plain http://testserver, so the config.py defaults apply instead (Secure cookies would never be sent back).
+for _name in ("SESSION_COOKIE_SECURE", "APP_PUBLIC_URL"):
+    os.environ.pop(_name, None)
 
 
 def _tone_plane(first_sample: int, samples: int, interleaved_channels: int, format_name: str) -> bytes:

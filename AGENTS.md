@@ -45,7 +45,7 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/app/services/storage/local.py` — working area of a running job on the media volume; PyAV and yt-dlp need local files.
 - `backend/app/services/projects/projects.py` — project registration and the licence check (FR01).
 - `backend/app/services/audit/audit.py` — adds entries to the append-only audit log (FR18).
-- `backend/app/services/llm/` — LLM layer (`docs/llm-contract.md`, section 7): `provider.py` holds the `LLMProvider` interface with its request and reply types, `errors.py` the LLM errors. The client, prompt loading and the Ollama and OpenAI-compatible providers come in T4.11.
+- `backend/app/services/llm/` — LLM layer (`docs/llm-contract.md`, section 7): `provider.py` holds the `LLMProvider` interface with its request and reply types, `errors.py` the LLM errors, `client.py` the `LLMClient` (`complete_json`: schema validation, retries with feedback and one log line per call), `prompts.py` the prompt files and their versions, `ollama.py` and `openai_compatible.py` the two providers (the only files that import LangChain) and `factory.py` the provider chosen by configuration: the profiles in `backend/app/core/llm.toml` plus the `LLM_*` variables.
 - `backend/app/services/workflow/ingestion_pipeline.py` — `run_ingestion`: runs FR02 steps 2–6 on local files, sends the results to object storage and reports each step as a job event.
 - `backend/app/services/workflow/dispatcher.py` — `JobDispatcher` interface.
 - `backend/app/services/workflow/rabbitmq.py` — exchanges, queues and `RabbitMQDispatcher`.
@@ -62,17 +62,19 @@ Early stage: video ingestion (FR02) runs end to end on PostgreSQL, RabbitMQ and 
 - `backend/migrations/` — Alembic migrations; `alembic upgrade head` runs when the backend starts.
 - `backend/app/workers/ingestion_worker.py` — RabbitMQ worker that runs the ingestion; it never touches PostgreSQL and runs from the backend image.
 - `backend/app/auth`, `backend/app/services/users` — empty packages reserved for auth and users.
-- `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests. `fake_llm_provider.py` replies with scripted LLM answers, so no test needs a model or network; `data/clips/short_transcript.json` is a synthetic transcript for the clip generation tests.
+- `backend/tests/` — pytest tests; `conftest.py` puts the backend root on `sys.path`. `in_process_dispatcher.py` and `in_memory_object_storage.py` are stand-ins for the broker and SeaweedFS in API tests. `fake_llm_provider.py` replies with scripted LLM answers, so no test needs a model or network; `data/clips/short_transcript.json` is a synthetic transcript for the clip generation tests. `data/llm/prompts/` holds the prompt files of the LLM layer tests.
 - `frontend/` — React 19 + TypeScript + Vite. Pages still use `src/data/mock.ts`, except sign-in:
   - `src/lib/api.ts` — `apiFetch`: calls the backend under `/api` with the session cookie (no tokens in the browser); a 401 goes to the login page.
   - `src/lib/auth.ts`, `src/lib/paths.ts` — sign-in, sign-up, sign-out and account deletion through the backend and Keycloak; frontend paths and the `next` check.
   - `src/auth/` — route loaders (`requireUser`, `redirectIfSignedIn`), `useCurrentUser` and the session check screens.
-- Configuration: `docker-compose.yml`, `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
+- `traefik/` — reverse proxy (T4.36): `dynamic/tls.yml` (TLS options and certificate), `generate-dev-cert.sh` (self-signed certificate in `traefik/certs/`, kept out of git).
+- Configuration: `docker-compose.yml`, `docker-compose.override.yml` (development only: host ports on 127.0.0.1), `.env.example`, `backend/requirements.txt`, `backend/Dockerfile`, `frontend/package.json`, `frontend/.oxlintrc.json`, `frontend/tsconfig*.json`.
 - Durable media lives in SeaweedFS (`S3_BUCKET`, the `seaweedfs_data` Docker volume), encrypted at rest. `/data/media` (`MEDIA_ROOT`, the `media_data` Docker volume) only holds the files of a running job.
 
 ## Commands
 
-Stack (frontend :5173, backend :8000, Postgres :5432, RabbitMQ AMQP :5672 and management UI :15672, SeaweedFS S3 API :8333, plus the `ingestion-worker` service):
+Stack: Traefik is the entry point (https://localhost for the frontend, https://localhost/api for the backend, https://media.localhost for signed media links, https://auth.localhost for Keycloak; README "Endereços"). In development `docker-compose.override.yml` also publishes on 127.0.0.1: frontend :5173, backend :8000, Postgres :5432, RabbitMQ AMQP :5672 and management UI :15672, SeaweedFS S3 API :8333, Keycloak admin :8080; plus the `ingestion-worker` service:
+- `sh traefik/generate-dev-cert.sh` — once, before the first start: the self-signed certificate for HTTPS.
 - `docker compose up --build` — start everything; backend and frontend hot-reload via bind mounts.
 - `docker compose down -v` — stop and delete volumes (DB, RabbitMQ, media).
 
@@ -84,6 +86,7 @@ Backend tests run with pytest in a local venv (from `backend/`); pytest stays ou
 - Run `tests/test_download.py` apart, with the same command and `timeout 240 python -m pytest -q -p no:cacheprovider tests/test_download.py`: a YouTube download can hang for a long time, and it would hold the whole suite.
 - `tests/test_ingestion.py` uses synthetic files built by the `make_sample` fixture in `conftest.py` (no network); `tests/test_download.py` needs network and the `ffmpeg` executable.
 - PyAV wheels bundle the FFmpeg libraries, so PyAV-based tests need nothing else on the host. Download tests need network and the `ffmpeg` executable on PATH (yt-dlp uses it to merge formats and cut ranges) and are skipped without it. Tests write to pytest temp dirs, not `/data/media`.
+- `tests/test_llm_real.py` (marker `llm`) runs against a real model only when `TEST_LLM_PROFILE` is set, never in CI; see the README section "LLM (Ollama)" for the command.
 
 Frontend (in `frontend/`):
 - `npm run dev` — Vite dev server

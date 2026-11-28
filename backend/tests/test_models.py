@@ -25,6 +25,7 @@ from app.database.models import (
     TranscriptSegment,
     TranscriptWord,
     UploadSession,
+    User,
 )
 
 
@@ -66,6 +67,27 @@ def test_project_keeps_the_fr01_metadata(db):
     assert stored.recording_date == date(2026, 10, 1)
     assert stored.status == ProjectStatus.DRAFT
     assert stored.owner_id is None
+
+def test_a_project_owner_must_be_an_existing_account(db):
+    project = make_project()
+    project.owner_id = uuid.uuid4()
+    db.add(project)
+
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+
+def test_an_account_that_still_owns_projects_cannot_be_deleted(db, user):
+    """Account deletion goes through delete_project first, so the videos leave the object storage too."""
+    project = make_project()
+    project.owner_id = user.id
+    db.add(project)
+    db.commit()
+
+    db.delete(db.get(User, user.id))
+
+    with pytest.raises(IntegrityError):
+        db.commit()
 
 
 def test_enums_are_stored_by_value(db):

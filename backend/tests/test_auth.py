@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
 
@@ -17,7 +18,7 @@ from app.core.config import (
     get_settings,
 )
 from app.database.base import utc_now
-from app.database.models import AuthSession, User
+from app.database.models import AuthSession, Project, User
 from app.main import app
 from app.services.auth.identity_provider import LoginRejectedError
 from conftest import add_user, sign_in
@@ -330,17 +331,50 @@ def test_the_account_page_is_the_keycloak_one(client):
 
 # --- Owner-only project access (MS3 §1.1.6) ---
 
+CLIP_BODY = {"title": "Final advice", "scenes": [{"start": 3790, "end": 3818}]}
+
+
+def stranger_client(session_factory):
+    """A second signed-in browser, of another account."""
+    other = add_user(session_factory, subject="subject-2", email="other@example.com", name="Other")
+    return sign_in(TestClient(app), session_factory, other)
+
+
 def test_project_routes_need_a_signed_in_user(client):
     assert client.get("/projects").status_code == 401
     assert client.post("/projects", json=PROJECT_BODY).status_code == 401
 
 
-def test_someone_elses_project_answers_like_a_missing_one(client, user, session_factory):
+def test_a_new_project_belongs_to_the_user_who_created_it(client, db, user, session_factory):
     project_id = sign_in(client, session_factory, user).post("/projects", json=PROJECT_BODY).json()["id"]
-    other = add_user(session_factory, subject="subject-2", email="other@example.com", name="Other")
-    stranger = sign_in(TestClient(app), session_factory, other)
 
-    assert stranger.get("/projects").json() == []
-    assert stranger.get(f"/projects/{project_id}").status_code == 404
-    assert stranger.delete(f"/projects/{project_id}").status_code == 404
-    assert client.get(f"/projects/{project_id}").status_code == 200
+    assert db.get(Project, uuid.UUID(project_id)).owner_id == user.id
+
+
+def test_the_library_lists_only_the_users_own_projects(client, user, session_factory):
+    sign_in(client, session_factory, user).post("/projects", json={**PROJECT_BODY, "title": "Mine"})
+    stranger = stranger_client(session_factory)
+    stranger.post("/projects", json={**PROJECT_BODY, "title": "Theirs"})
+
+    assert [item["title"] for item in client.get("/projects").json()["items"]] == ["Mine"]
+    assert [item["title"] for item in stranger.get("/projects").json()["items"]] == ["Theirs"]
+
+
+def test_someone_elses_project_answers_like_a_missing_one(client, user, session_factory):
+    owner = sign_in(client, session_factory, user)
+    url = f"/projects/{owner.post('/projects', json=PROJECT_BODY).json()['id']}"
+    clip_id = owner.post(f"{url}/clips", json=CLIP_BODY).json()["id"]
+    clip_url = f"{url}/clips/{clip_id}"
+    stranger = stranger_client(session_factory)
+
+    assert stranger.get("/projects").json()["total"] == 0
+    assert stranger.get(url).status_code == 404
+    assert stranger.patch(url, json={"title": "Taken"}).status_code == 404
+    assert stranger.get(f"{url}/clips").status_code == 404
+    assert stranger.post(f"{url}/clips", json=CLIP_BODY).status_code == 404
+    assert stranger.patch(clip_url, json={"title": "Taken"}).status_code == 404
+    assert stranger.delete(clip_url).status_code == 404
+    assert stranger.get(f"{url}/documents").status_code == 404
+    assert stranger.delete(url).status_code == 404
+    assert owner.get(url).json()["title"] == "Debate"
+    assert owner.get(clip_url).status_code == 200

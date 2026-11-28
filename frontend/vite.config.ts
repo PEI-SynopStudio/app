@@ -5,6 +5,8 @@ import { defineConfig } from 'vite'
 const API_PREFIX = '/api'
 // Outside Docker the backend runs on the host; docker-compose.yml points this to the backend service.
 const DEFAULT_API_PROXY_TARGET = 'http://localhost:8000'
+// Behind Traefik the browser reaches the dev server on 443, so the hot-reload WebSocket must use that port too.
+const HMR_CLIENT_PORT = process.env.HMR_CLIENT_PORT ? Number(process.env.HMR_CLIENT_PORT) : undefined
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -13,6 +15,7 @@ export default defineConfig({
     // Docker on Windows doesn't pass file changes from the host to the container,
     // so the dev server polls instead (enabled in docker-compose.yml).
     watch: { usePolling: process.env.CHOKIDAR_USEPOLLING === 'true' },
+    hmr: { clientPort: HMR_CLIENT_PORT },
     // The browser calls the API on its own origin, so the session cookie works without CORS;
     // the prefix is removed before the request reaches the backend. ws: the progress WebSocket.
     proxy: {
