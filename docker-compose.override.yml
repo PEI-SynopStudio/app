@@ -1,0 +1,26 @@
+# Development only. Compose loads this file automatically next to docker-compose.yml, so `docker compose up`
+# on a laptop also publishes each service's own port, for the tests, the RabbitMQ management UI and debugging.
+# The ports bind to 127.0.0.1, so other machines on the network can't reach them.
+# On the project VM, leave this file out so only Traefik (80, 443) is exposed:
+#   docker compose -f docker-compose.yml up -d
+services:
+  frontend:
+    ports:
+      - "127.0.0.1:5173:5173"
+
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  rabbitmq:
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  seaweedfs:
+    ports:
+      - "127.0.0.1:8333:8333"

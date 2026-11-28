@@ -33,6 +33,11 @@ TONE_AMPLITUDE = 0.5
 SAMPLE_TYPES = {"flt": ("f", 1.0, float), "s16": ("h", 32767, int), "s32": ("i", 2**31 - 1, int)}
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://pei:pei@localhost:5433/pei_test")
 
+# Tests also run inside the backend container, which carries the deployment's HTTPS settings. The test client speaks
+# plain http://testserver, so the config.py defaults apply instead (Secure cookies would never be sent back).
+for _name in ("SESSION_COOKIE_SECURE", "APP_PUBLIC_URL"):
+    os.environ.pop(_name, None)
+
 
 def _tone_plane(first_sample: int, samples: int, interleaved_channels: int, format_name: str) -> bytes:
     """PCM bytes of a 440 Hz sine for one audio plane (planar formats have one channel per plane)."""
