@@ -64,6 +64,11 @@
   margin-top: 8px;
 }
 
+.auth__note {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
 .auth__footer {
   font-size: 0.9375rem;
   color: var(--muted);

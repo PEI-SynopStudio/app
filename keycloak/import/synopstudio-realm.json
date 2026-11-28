@@ -22,14 +22,16 @@
   "maxFailureWaitSeconds": 900,
   "maxDeltaTimeSeconds": 43200,
   "minimumQuickLoginWaitSeconds": 60,
-  "quickLoginCheckMilliSeconds": 1000,
+  "quickLoginCheckMilliSeconds": 0,
 
   "internationalizationEnabled": true,
   "supportedLocales": ["en"],
   "defaultLocale": "en",
   "localizationTexts": {
     "en": {
-      "termsText": "<p>Please read the <a href=\"${APP_PUBLIC_URL}/terms\">Terms and Conditions</a> and the <a href=\"${APP_PUBLIC_URL}/privacy\">Privacy Policy</a>.</p><p>By accepting, you confirm that you are at least 13 years old, with a parent or guardian's authorisation if you are under 18.</p>"
+      "termsText": "<p>Please read the <a href=\"${APP_PUBLIC_URL}/terms\">Terms and Conditions</a> and the <a href=\"${APP_PUBLIC_URL}/privacy\">Privacy Policy</a>.</p><p>By accepting, you confirm that you are at least 13 years old, with a parent or guardian's authorisation if you are under 18.</p>",
+      "invalidUserMessage": "Invalid email or password. After 5 failed attempts, sign-in is blocked for 15 minutes.",
+      "accountTemporarilyDisabledMessage": "Too many failed sign-in attempts. Sign-in is blocked for 15 minutes; please try again later."
     }
   },
 
